@@ -1,0 +1,379 @@
+"use client";
+
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { Document, Page, pdfjs } from "react-pdf";
+
+// Configure PDF.js worker to use react-pdf's bundled version
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+interface Annotation {
+  id: string;
+  pageNumber: number;
+  type: "highlight" | "pen" | "text";
+  data: any;
+}
+
+interface PDFViewerProps {
+  // pass either full URL or filename from DB (e.g. "Shelley_Frankenstein.pdf")
+  pdfUrl: string;
+  bookId: string;
+}
+
+export default function PDFViewer({ pdfUrl, bookId }: PDFViewerProps) {
+  const [numPages, setNumPages] = useState<number>(0);
+  const [pageNumber, setPageNumber] = useState<number>(1);
+  const [scale, setScale] = useState<number>(1.5);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [currentTool, setCurrentTool] = useState<"none" | "highlight" | "pen" | "text">("none");
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const pageWrapRef = useRef<HTMLDivElement>(null);
+  const drawingDataRef = useRef<{ x: number; y: number }[]>([]);
+
+  // ✅ FIX #2: Always resolve DB filenames to the *books* bucket
+  const resolvedPdfUrl = useMemo(() => {
+    // If already absolute, use it (but you should pass filenames from DB)
+    if (pdfUrl.startsWith("http://") || pdfUrl.startsWith("https://")) return pdfUrl;
+
+    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const filename = pdfUrl.replace(/^\/+/, "");
+
+    // ✅ bucket = books
+    return `${SUPABASE_URL}/storage/v1/object/public/books/${encodeURIComponent(filename)}`;
+  }, [pdfUrl]);
+
+  // Memoize the file prop to prevent unnecessary reloads
+  const fileConfig = useMemo(() => ({ url: resolvedPdfUrl }), [resolvedPdfUrl]);
+
+  useEffect(() => {
+    console.log("PDF URL (resolved):", resolvedPdfUrl);
+    setLoadErr(null);
+    setPageNumber(1);
+  }, [resolvedPdfUrl]);
+
+  function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
+    setNumPages(numPages);
+  }
+
+  // Load annotations from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(`annotations-${bookId}`);
+    if (saved) setAnnotations(JSON.parse(saved));
+  }, [bookId]);
+
+  // Save annotations to localStorage
+  useEffect(() => {
+    localStorage.setItem(`annotations-${bookId}`, JSON.stringify(annotations));
+  }, [annotations, bookId]);
+
+  // ---- Canvas sizing (align drawing with the PDF page) ----
+  const syncCanvasToPage = () => {
+    const canvas = canvasRef.current;
+    const wrap = pageWrapRef.current;
+    if (!canvas || !wrap) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(wrap.clientWidth));
+    const h = Math.max(1, Math.floor(wrap.clientHeight));
+
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+
+  useLayoutEffect(() => {
+    syncCanvasToPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageNumber, scale]);
+
+  useEffect(() => {
+    const onResize = () => syncCanvasToPage();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Redraw annotations for the current page whenever annotations change
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const pageAnnotations = annotations.filter((a) => a.pageNumber === pageNumber);
+    for (const a of pageAnnotations) {
+      if (a.type === "pen") {
+        ctx.beginPath();
+        ctx.strokeStyle = "#FF6B6B";
+        ctx.lineWidth = 2;
+
+        const pts = a.data as { x: number; y: number }[];
+        if (pts.length > 0) {
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.stroke();
+        }
+      } else if (a.type === "highlight") {
+        const pts = a.data as { x: number; y: number }[];
+        if (pts.length >= 2) {
+          const start = pts[0];
+          const end = pts[pts.length - 1];
+          ctx.fillStyle = "rgba(255, 235, 59, 0.30)";
+          ctx.fillRect(start.x, start.y, end.x - start.x, 20);
+        }
+      }
+    }
+  }, [annotations, pageNumber]);
+
+  // ---- Drawing handlers ----
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (currentTool === "none") return;
+    setIsDrawing(true);
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    drawingDataRef.current = [{ x, y }];
+
+    if (currentTool === "pen") {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.strokeStyle = "#FF6B6B";
+      ctx.lineWidth = 2;
+    }
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing || currentTool === "none") return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    drawingDataRef.current.push({ x, y });
+
+    if (currentTool === "pen") {
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    } else if (currentTool === "highlight") {
+      // re-render cleanly while dragging highlight
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // draw existing annotations
+      const pageAnnotations = annotations.filter((a) => a.pageNumber === pageNumber);
+      for (const a of pageAnnotations) {
+        if (a.type === "pen") {
+          ctx.beginPath();
+          ctx.strokeStyle = "#FF6B6B";
+          ctx.lineWidth = 2;
+          const pts = a.data as { x: number; y: number }[];
+          if (pts.length > 0) {
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+            ctx.stroke();
+          }
+        } else if (a.type === "highlight") {
+          const pts = a.data as { x: number; y: number }[];
+          if (pts.length >= 2) {
+            const start = pts[0];
+            const end = pts[pts.length - 1];
+            ctx.fillStyle = "rgba(255, 235, 59, 0.30)";
+            ctx.fillRect(start.x, start.y, end.x - start.x, 20);
+          }
+        }
+      }
+
+      // draw the in-progress highlight
+      const start = drawingDataRef.current[0];
+      ctx.fillStyle = "rgba(255, 235, 59, 0.30)";
+      ctx.fillRect(start.x, start.y, x - start.x, 20);
+    }
+  };
+
+  const stopDrawing = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+
+    if (drawingDataRef.current.length > 0 && currentTool !== "none") {
+      const newAnnotation: Annotation = {
+        id: Date.now().toString(),
+        pageNumber,
+        type: currentTool as "highlight" | "pen" | "text",
+        data: [...drawingDataRef.current],
+      };
+      setAnnotations((prev) => [...prev, newAnnotation]);
+      drawingDataRef.current = [];
+    }
+  };
+
+  const clearAnnotations = () => {
+    setAnnotations((prev) => prev.filter((a) => a.pageNumber !== pageNumber));
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const changePage = (offset: number) => {
+    setPageNumber((prev) => Math.max(1, Math.min(prev + offset, numPages)));
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-50">
+      {/* Toolbar */}
+      <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-4">
+          <h2 className="text-xl font-semibold text-gray-800">PDF Viewer</h2>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => changePage(-1)}
+              disabled={pageNumber <= 1}
+              className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-gray-600">
+              Page {pageNumber} of {numPages}
+            </span>
+            <button
+              onClick={() => changePage(1)}
+              disabled={pageNumber >= numPages}
+              className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors"
+            >
+              Next
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setScale((s) => Math.max(0.5, s - 0.25))}
+              className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors"
+            >
+              -
+            </button>
+            <span className="text-sm text-gray-600">{Math.round(scale * 100)}%</span>
+            <button
+              onClick={() => setScale((s) => Math.min(3, s + 0.25))}
+              className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentTool("pen")}
+            className={`px-4 py-2 rounded transition-colors ${
+              currentTool === "pen"
+                ? "bg-red-500 text-white"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+            }`}
+          >
+            ✏️ Pen
+          </button>
+          <button
+            onClick={() => setCurrentTool("highlight")}
+            className={`px-4 py-2 rounded transition-colors ${
+              currentTool === "highlight"
+                ? "bg-yellow-400 text-gray-800"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+            }`}
+          >
+            🖍️ Highlight
+          </button>
+          <button
+            onClick={() => setCurrentTool("none")}
+            className={`px-4 py-2 rounded transition-colors ${
+              currentTool === "none"
+                ? "bg-green-500 text-white"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+            }`}
+          >
+            👆 Select
+          </button>
+          <button
+            onClick={clearAnnotations}
+            className="px-4 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+          >
+            🗑️ Clear Page
+          </button>
+        </div>
+      </div>
+
+      {/* PDF Viewer */}
+      <div className="flex-1 overflow-auto bg-gray-100 p-8" ref={containerRef}>
+        <div className="max-w-4xl mx-auto bg-white shadow-lg relative">
+          <div ref={pageWrapRef} className="relative">
+            {loadErr && (
+              <div className="p-4 text-sm text-red-600 break-all border-b">
+                {loadErr}
+              </div>
+            )}
+
+            <Document
+              key={resolvedPdfUrl}
+              file={fileConfig}
+              onLoadSuccess={onDocumentLoadSuccess}
+              onLoadError={(err) => {
+                console.error("PDF load error:", err);
+                setLoadErr(`PDF load error: ${String(err)} | URL: ${resolvedPdfUrl}`);
+              }}
+              onSourceError={(err) => {
+                console.error("PDF source error:", err);
+                setLoadErr(`PDF source error: ${String(err)} | URL: ${resolvedPdfUrl}`);
+              }}
+              loading={
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-gray-500">Loading PDF...</div>
+                </div>
+              }
+              error={
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-red-500 break-all">
+                    Error loading PDF. URL: {resolvedPdfUrl}
+                  </div>
+                </div>
+              }
+            >
+              <Page
+                pageNumber={pageNumber}
+                scale={scale}
+                renderTextLayer
+                renderAnnotationLayer
+                onRenderSuccess={() => syncCanvasToPage()}
+              />
+            </Document>
+
+            <canvas
+              ref={canvasRef}
+              className="absolute top-0 left-0 cursor-crosshair"
+              style={{ pointerEvents: currentTool !== "none" ? "auto" : "none" }}
+              onMouseDown={startDrawing}
+              onMouseMove={draw}
+              onMouseUp={stopDrawing}
+              onMouseLeave={stopDrawing}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
