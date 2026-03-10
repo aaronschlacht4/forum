@@ -1,7 +1,6 @@
 import React from "react";
 import {
   Home,
-  MessageSquare,
   ChevronLeft,
   ChevronRight,
   MousePointer2,
@@ -15,10 +14,8 @@ interface ToolbarProps {
   currentTool: "none" | "highlight" | "pen" | "text";
   pageNumber: number;
   numPages: number;
-  showSidebar: boolean;
   hasSelectedText: boolean;
   onToolChange: (tool: "none" | "highlight" | "pen" | "text") => void;
-  onToggleSidebar: () => void;
   onChangePage: (delta: number) => void;
   onAddComment: () => void;
   onClearAnnotations: () => void;
@@ -29,10 +26,8 @@ export default function Toolbar({
   currentTool,
   pageNumber,
   numPages,
-  showSidebar,
   hasSelectedText,
   onToolChange,
-  onToggleSidebar,
   onChangePage,
   onAddComment,
   onClearAnnotations,
@@ -53,7 +48,7 @@ export default function Toolbar({
         WebkitBackdropFilter: "blur(20px) saturate(180%)",
         boxShadow: active
           ? "0 4px 20px rgba(102, 126, 234, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 0 20px rgba(102, 126, 234, 0.3)"
-          : "0 4px 16px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 20px rgba(255, 255, 255, 0.5), 0 0 32px rgba(255, 255, 255, 0.3)",
+          : "0 2px 10px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.15)",
         opacity: disabled ? 0.4 : 1,
         cursor: disabled ? "not-allowed" : "pointer",
       },
@@ -71,11 +66,12 @@ export default function Toolbar({
 
   return (
     <div
-      className="fixed flex flex-col items-center z-40"
+      className="absolute flex flex-col items-center z-40"
       style={{
         right: "28px",
         top: "50%",
         transform: "translateY(-50%)",
+        height: "80%",
         padding: "19px 13px",
         background: "rgba(255, 255, 255, 0.08)",
         backdropFilter: "blur(80px) saturate(200%)",
@@ -84,19 +80,12 @@ export default function Toolbar({
         borderRadius: "22px",
         boxShadow: "0 20px 60px rgba(0, 0, 0, 0.12), inset 0 2px 0 rgba(255, 255, 255, 0.3)",
         gap: "10px",
+        justifyContent: "space-between",
       }}
     >
       {/* Top section - Home & Comments */}
       <button onClick={onHomeClick} {...iconBtn(false)} title="Home">
         <Home className={iconClass} style={iconStyle} />
-      </button>
-
-      <button
-        onClick={onToggleSidebar}
-        {...iconBtn(showSidebar)}
-        title={showSidebar ? "Hide comments" : "Show comments"}
-      >
-        <MessageSquare className={iconClass} style={iconStyle} />
       </button>
 
       {/* Page Navigation */}
@@ -120,8 +109,7 @@ export default function Toolbar({
           height: "51px",
           backdropFilter: "blur(20px) saturate(180%)",
           WebkitBackdropFilter: "blur(20px) saturate(180%)",
-          boxShadow:
-            "0 4px 16px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 20px rgba(255, 255, 255, 0.5), 0 0 32px rgba(255, 255, 255, 0.3)",
+          boxShadow: "0 2px 10px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.15)",
           color: "#ffffff",
           textShadow: "0 0 3px rgba(0, 0, 0, 0.25), 0 0 1px rgba(0, 0, 0, 0.3)",
         }}

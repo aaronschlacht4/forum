@@ -78,6 +78,7 @@ export default function AnnotationsSidebar({
     <div
       className="w-80 flex flex-col overflow-hidden"
       style={{
+        height: "100%",
         background: "rgba(255, 255, 255, 0.08)",
         backdropFilter: "blur(80px) saturate(200%)",
         WebkitBackdropFilter: "blur(80px) saturate(200%)",

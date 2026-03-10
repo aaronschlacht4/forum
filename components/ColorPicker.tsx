@@ -16,7 +16,7 @@ const colors = [
 export default function ColorPicker({ currentColor, onColorChange }: ColorPickerProps) {
   return (
     <div
-      className="fixed flex flex-col items-center z-40 transition-all duration-300"
+      className="absolute flex flex-col items-center z-40 transition-all duration-300"
       style={{
         right: "110px",
         top: "50%",

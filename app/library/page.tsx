@@ -3,77 +3,197 @@
 import React, { useEffect, useState } from "react";
 import ShelfScene, { BookData } from "@/components/ShelfScene";
 
-export default function Page() {
+const EXAMPLE_TITLES = [
+  "Dune", "1984", "Brave New World", "The Great Gatsby", "Crime and Punishment",
+  "To Kill a Mockingbird", "Moby-Dick", "War and Peace", "The Odyssey", "Hamlet",
+  "Don Quixote", "Anna Karenina", "The Brothers Karamazov", "Ulysses", "Middlemarch",
+  "Jane Eyre", "Wuthering Heights", "Pride and Prejudice", "Frankenstein", "Dracula",
+  "The Count of Monte Cristo", "Les Misérables", "Madame Bovary", "The Stranger",
+  "In Search of Lost Time", "One Hundred Years of Solitude", "Lolita", "The Trial",
+  "The Castle", "Metamorphosis", "The Sun Also Rises", "A Farewell to Arms",
+  "For Whom the Bell Tolls", "The Old Man and the Sea", "Catch-22", "Slaughterhouse-Five",
+  "Beloved", "The Road", "Blood Meridian", "No Country for Old Men", "East of Eden",
+  "Of Mice and Men", "The Grapes of Wrath", "Cannery Row", "Their Eyes Were Watching God",
+  "Invisible Man", "Native Son", "The Color Purple", "Kindred", "Parable of the Sower",
+  "The Left Hand of Darkness", "The Dispossessed", "Fahrenheit 451", "The Martian Chronicles",
+  "Foundation", "I Robot", "Do Androids Dream", "Neuromancer", "Snow Crash",
+  "The Name of the Rose", "Pillars of the Earth", "A Brief History of Time",
+  "Sapiens", "Thinking Fast and Slow", "The Republic", "Meditations", "Nicomachean Ethics",
+  "Thus Spoke Zarathustra", "Being and Time", "The Prince", "Leviathan", "Critique of Pure Reason",
+  "The Wealth of Nations", "On the Origin of Species", "The Selfish Gene", "Cosmos",
+  "Surely You're Joking Mr Feynman", "The Double Helix", "Silent Spring", "The Sixth Extinction",
+];
+
+const FALLBACK: BookData[] = EXAMPLE_TITLES.map((title, i) => ({
+  id: `fallback-${i}`,
+  title,
+  author: "Example Author",
+}));
+
+export default function LibraryPage() {
   const [q, setQ] = useState("");
   const [books, setBooks] = useState<BookData[]>([]);
-  const [status, setStatus] = useState<string>("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const run = async () => {
-      try {
-        setStatus("Loading…");
-        const url = q ? `/api/books?q=${encodeURIComponent(q)}` : `/api/books`;
-        const res = await fetch(url);
-
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`API ${res.status}: ${text}`);
-        }
-
-        const data = await res.json();
-        setBooks(Array.isArray(data) ? data : []);
-        setStatus("OK");
-      } catch (e: any) {
+    setLoading(true);
+    const url = q ? `/api/books?q=${encodeURIComponent(q)}` : `/api/books`;
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => setBooks(Array.isArray(d) ? d : []))
+      .catch((e) => {
         console.error(e);
         setBooks([]);
-        setStatus(e?.message ?? "Failed to fetch /api/books");
-      }
-    };
-
-    run();
+      })
+      .finally(() => setLoading(false));
   }, [q]);
 
-  const visibleBooks =
-    books.length > 0
-      ? books
-      : Array.from({ length: 12 }).map((_, i) => ({
-          id: `fallback-${i}`,
-          title: `Book ${i + 1}`,
-          author: "Author",
-          // pdfUrl: "/pdfs/example.pdf" // optional fallback
-        }));
+  const visible = books.length > 0 ? books : FALLBACK;
 
   return (
-    <main className="min-h-screen bg-white">
-      <div className="mx-auto max-w-6xl px-8 py-10">
-        <header className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h1 className="text-5xl font-semibold tracking-tight">Univault</h1>
-            <p className="mt-2 text-gray-500">Your digital bookshelf</p>
-            <p className="mt-2 text-xs text-gray-400">
-              {books.length} books from API — {status}
-            </p>
-          </div>
+    <main
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "#140d04",
+        overflow: "hidden",
+      }}
+    >
+      {/* 3D scene — position:relative so the absolute Canvas fills this div */}
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <ShelfScene books={visible} />
+      </div>
 
-          <div className="flex items-center gap-3">
-            <input
-              className="w-[460px] max-w-[60vw] rounded-full border border-gray-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-black/10"
-              placeholder="Search title or author…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+      {/* Top bar */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "20px 28px",
+          background:
+            "linear-gradient(to bottom, rgba(20,13,4,0.9) 0%, transparent 100%)",
+          zIndex: 10,
+        }}
+      >
+        {/* Branding */}
+        <div>
+          <div
+            style={{
+              color: "#ffe8c0",
+              fontWeight: 600,
+              fontSize: 18,
+              letterSpacing: -0.3,
+              fontFamily: "system-ui",
+            }}
+          >
+            Univault
+          </div>
+          <div
+            style={{
+              color: "rgba(255,220,160,0.4)",
+              fontSize: 10,
+              letterSpacing: 2.5,
+              textTransform: "uppercase",
+              fontFamily: "system-ui",
+              marginTop: 1,
+            }}
+          >
+            Library
+          </div>
+        </div>
+
+        {/* Search bar */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            background: "rgba(255,232,180,0.07)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            border: "1px solid rgba(255,210,130,0.18)",
+            borderRadius: 40,
+            padding: "9px 18px",
+            minWidth: 320,
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="rgba(255,210,140,0.55)"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input
+            style={{
+              background: "none",
+              border: "none",
+              outline: "none",
+              color: "#ffe8c0",
+              fontSize: 13,
+              width: 240,
+              caretColor: "#ffc87a",
+              fontFamily: "system-ui",
+            }}
+            placeholder="Search title or author…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {loading && (
+            <div
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: "rgba(255,200,120,0.55)",
+                flexShrink: 0,
+              }}
             />
-            <button className="rounded-full border border-gray-200 px-5 py-3 text-sm hover:bg-gray-50">
-              Search
-            </button>
-          </div>
-        </header>
+          )}
+        </div>
 
-        {/* BIG shelf area */}
-        <section className="mt-8 rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
-          <div className="h-[70vh] min-h-[560px] w-full rounded-2xl bg-gray-50">
-            <ShelfScene books={visibleBooks} />
-          </div>
-        </section>
+        {/* Book count */}
+        <div
+          style={{
+            color: "rgba(255,220,160,0.3)",
+            fontSize: 12,
+            fontFamily: "system-ui",
+            minWidth: 80,
+            textAlign: "right",
+          }}
+        >
+          {books.length > 0 ? `${books.length} books` : ""}
+        </div>
+      </div>
+
+      {/* Bottom hint */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 22,
+          left: "50%",
+          transform: "translateX(-50%)",
+          color: "rgba(255,220,160,0.2)",
+          fontSize: 10,
+          letterSpacing: 2,
+          textTransform: "uppercase",
+          fontFamily: "system-ui",
+          userSelect: "none",
+          zIndex: 10,
+          whiteSpace: "nowrap",
+        }}
+      >
+        Scroll to browse · Click to read
       </div>
     </main>
   );
