@@ -59,6 +59,9 @@ export default function LibraryPage() {
         overflow: "hidden",
       }}
     >
+      <style>{`
+        .library-search::placeholder { color: rgba(255,218,160,0.45); }
+      `}</style>
       {/* 3D scene — position:relative so the absolute Canvas fills this div */}
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
         <ShelfScene books={visible} />
@@ -95,7 +98,7 @@ export default function LibraryPage() {
           </div>
           <div
             style={{
-              color: "rgba(255,220,160,0.4)",
+              color: "rgba(255,220,160,0.75)",
               fontSize: 10,
               letterSpacing: 2.5,
               textTransform: "uppercase",
@@ -113,10 +116,10 @@ export default function LibraryPage() {
             display: "flex",
             alignItems: "center",
             gap: 10,
-            background: "rgba(255,232,180,0.07)",
-            backdropFilter: "blur(16px)",
-            WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(255,210,130,0.18)",
+            background: "rgba(255,232,180,0.11)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            border: "1px solid rgba(255,218,150,0.32)",
             borderRadius: 40,
             padding: "9px 18px",
             minWidth: 320,
@@ -127,7 +130,7 @@ export default function LibraryPage() {
             height="14"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="rgba(255,210,140,0.55)"
+            stroke="rgba(255,218,160,0.85)"
             strokeWidth="2.5"
             strokeLinecap="round"
           >
@@ -145,6 +148,7 @@ export default function LibraryPage() {
               caretColor: "#ffc87a",
               fontFamily: "system-ui",
             }}
+            className="library-search"
             placeholder="Search title or author…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -165,7 +169,7 @@ export default function LibraryPage() {
         {/* Book count */}
         <div
           style={{
-            color: "rgba(255,220,160,0.3)",
+            color: "rgba(255,220,160,0.65)",
             fontSize: 12,
             fontFamily: "system-ui",
             minWidth: 80,
