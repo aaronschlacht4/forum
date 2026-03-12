@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* Scroll reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(48px);
+  transition: opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-delay-1 { transition-delay: 0.1s; }
+.reveal-delay-2 { transition-delay: 0.2s; }
+.reveal-delay-3 { transition-delay: 0.3s; }
+
 :root {
   --background: #C5C5C5;
   --foreground: #171717;

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(find /workspaces/forum -name schema* -o -name *.prisma -o -name *migration*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

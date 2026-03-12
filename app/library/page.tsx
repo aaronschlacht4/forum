@@ -84,7 +84,7 @@ export default function LibraryPage() {
         }}
       >
         {/* Branding */}
-        <div>
+        <a href="/" style={{ textDecoration: "none" }}>
           <div
             style={{
               color: "#ffe8c0",
@@ -94,7 +94,7 @@ export default function LibraryPage() {
               fontFamily: "system-ui",
             }}
           >
-            Univault
+            Forum
           </div>
           <div
             style={{
@@ -108,7 +108,7 @@ export default function LibraryPage() {
           >
             Library
           </div>
-        </div>
+        </a>
 
         {/* Search bar */}
         <div

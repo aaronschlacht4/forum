@@ -15,20 +15,6 @@ interface SpinningBookProps {
   onClick?: () => void;
 }
 
-/**
- * ✅ What this version fixes (based on your exact complaint):
- * - You don't want a "blob under the book" that gets hidden by the book.
- * - You want a SHADOW with the SHAPE of the book, and then OFFSET (so you can actually see it).
- *
- * ✅ How we do it:
- * - Create a "shadow rectangle" that matches the book's footprint/aspect ratio.
- * - Blur it (gaussian-ish) so it looks like a real cast shadow.
- * - OFFSET it down/right (base offset + interactive offset).
- * - Keep it behind the WebGL book (correct physically), but offset so it's visible and not "blocked".
- *
- * This is the same trick used on premium product pages.
- */
-
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -75,11 +61,9 @@ function Book3D({
     return clone;
   }, [scene, coverTexture]);
 
-  // Auto-fit model to consistent size + center it
   useLayoutEffect(() => {
     if (!modelRef.current) return;
 
-    // reset transforms before measuring
     modelRef.current.position.set(0, 0, 0);
     modelRef.current.rotation.set(0, 0, 0);
     modelRef.current.scale.set(1, 1, 1);
@@ -92,10 +76,8 @@ function Book3D({
     const scale = targetHeight / (size.y || 1);
     modelRef.current.scale.setScalar(scale);
 
-    // Your pipeline's "front cover" orientation (keep this if it's correct for you)
     modelRef.current.rotation.set(Math.PI, 0, 0);
 
-    // recenter after scaling and rotation
     const box2 = new THREE.Box3().setFromObject(modelRef.current);
     const center = new THREE.Vector3();
     box2.getCenter(center);
@@ -143,8 +125,6 @@ export default function SpinningBook({
   onClick,
 }: SpinningBookProps) {
   const [coverTexture, setCoverTexture] = useState<THREE.Texture | null>(null);
-
-  // hover values from the book (used to offset the shadow slightly)
   const [hover, setHover] = useState({ x: 0, y: 0 });
 
   const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -163,10 +143,7 @@ export default function SpinningBook({
         texture.generateMipmaps = true;
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.magFilter = THREE.LinearFilter;
-
-        // wrap-around textures
         texture.flipY = false;
-
         texture.needsUpdate = true;
         setCoverTexture(texture);
       },
@@ -175,86 +152,37 @@ export default function SpinningBook({
     );
   }, [cover_path, SUPABASE_COVERS]);
 
-  // Tight, clamped interactive offsets (small range)
   const hx = clamp(hover.x, -0.18, 0.18);
   const hy = clamp(hover.y, -0.18, 0.18);
-
-  // base cast direction (down-right) + interactive drift
-  const baseX = -10; // px horizontal offset (less to shift left)
-  const baseY = 12; // px vertical offset (down)
-  const dx = baseX + hx * 40; // interactive horizontal movement (more visible)
-  const dy = baseY + hy * 40; // interactive vertical movement (more visible)
-
-  // shadow "squash" (perspective) and intensity control
-  const tiltMag = Math.min(1, Math.hypot(hx, hy) / 0.18); // 0..1
-  const shadowScaleX = 1.0 + tiltMag * 0.12; // more dramatic scale on tilt
-  const shadowScaleY = 1.0 - tiltMag * 0.15; // more dramatic squash on tilt
+  const shadowX = Math.round(-8 + hx * 30);
+  const shadowY = Math.round(10 + hy * 30);
 
   return (
     <div className="flex flex-col items-center gap-4 cursor-pointer group" onClick={onClick}>
       <div
         className="relative w-[300px] h-[360px] transition-transform group-hover:scale-105"
-        style={{
-          padding: "18px 14px",
-          background: "transparent",
-          overflow: "visible", // ✅ important: don't clip the cast shadow
-        }}
+        style={{ padding: "18px 14px", background: "transparent" }}
       >
-        {/**
-         * ✅ BOOK-SHAPED CAST SHADOW (NOT A BLOB)
-         * - This rectangle matches the book's silhouette better than an ellipse.
-         * - Then we blur it so it becomes a realistic shadow.
-         * - And we OFFSET it so it is clearly visible (not hidden “under” the book).
-         */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute left-1/2 top-[50%]"
+        <Canvas
           style={{
-            zIndex: 0,
-
-            // Match book footprint - wider
-            width: "72%",
-            height: "80%",
-
-            // Slight rounding so it feels like a physical object shadow
-            borderRadius: "8px",
-
-            // Pure black shadow - no transparency to prevent color bleed
-            background: "#000000",
-
-            // Gaussian blur for soft shadow - less blur
-            filter: "blur(4px)",
-
-            // Shadow opacity - controls visibility
-            opacity: 0.3,
-
-            // Isolate to prevent blur from sampling book colors
-            isolation: "isolate",
-
-            // ✅ The key: OFFSET the shadow so it peeks out + interactive movement
-            transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scaleX(${shadowScaleX}) scaleY(${shadowScaleY})`,
+            width: "100%",
+            height: "100%",
+            background: "transparent",
+            filter: `drop-shadow(${shadowX}px ${shadowY}px 6px rgba(10,30,15,0.55))`,
           }}
-        />
+          camera={{ position: [0, 0, 4.9], fov: 30 }}
+          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
+          dpr={[1, 2]}
+          onCreated={({ gl }) => {
+            gl.setClearColor(0x000000, 0);
+          }}
+        >
+          <ambientLight intensity={1.15} />
+          <directionalLight position={[3, 4, 6]} intensity={0.9} />
+          <directionalLight position={[-3, 2, 6]} intensity={0.45} />
 
-        {/* Canvas must render truly transparent so the shadow is visible */}
-        <div className="relative" style={{ zIndex: 1, width: "100%", height: "100%" }}>
-          <Canvas
-            style={{ width: "100%", height: "100%", background: "transparent" }}
-            camera={{ position: [0, 0, 4.9], fov: 30 }}
-            gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-            dpr={[1, 2]}
-            onCreated={({ gl }) => {
-              // ensure transparent clear color so the shadow shows through
-              gl.setClearColor(0x000000, 0);
-            }}
-          >
-            <ambientLight intensity={1.15} />
-            <directionalLight position={[3, 4, 6]} intensity={0.9} />
-            <directionalLight position={[-3, 2, 6]} intensity={0.45} />
-
-            <Book3D coverTexture={coverTexture} onHoverChange={(x, y) => setHover({ x, y })} />
-          </Canvas>
-        </div>
+          <Book3D coverTexture={coverTexture} onHoverChange={(x, y) => setHover({ x, y })} />
+        </Canvas>
       </div>
 
       <div className="flex flex-col items-center gap-1">

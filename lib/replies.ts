@@ -12,6 +12,9 @@ export interface Reply {
   parentReplyId?: string;
   createdAt: string;
   updatedAt: string;
+  upvotes?: number;
+  downvotes?: number;
+  userVote?: 1 | -1 | null;
 }
 
 export interface DBReply {
@@ -175,6 +178,66 @@ export async function saveReply(
   }
 
   return dbToApp(data);
+}
+
+// Get vote counts for a list of reply IDs
+export async function getVotesForReplies(
+  replyIds: string[],
+  userId?: string
+): Promise<Map<string, { upvotes: number; downvotes: number; userVote: 1 | -1 | null }>> {
+  if (replyIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from('reply_votes')
+    .select('reply_id, vote, user_id')
+    .in('reply_id', replyIds);
+
+  if (error) {
+    // PGRST205 = table not found; silently skip until migration is run
+    if (error.code !== 'PGRST205') console.error('Error loading votes:', error);
+    return new Map();
+  }
+
+  const result = new Map<string, { upvotes: number; downvotes: number; userVote: 1 | -1 | null }>();
+  for (const replyId of replyIds) {
+    result.set(replyId, { upvotes: 0, downvotes: 0, userVote: null });
+  }
+
+  for (const row of data || []) {
+    const entry = result.get(row.reply_id);
+    if (!entry) continue;
+    if (row.vote === 1) entry.upvotes++;
+    else if (row.vote === -1) entry.downvotes++;
+    if (userId && row.user_id === userId) entry.userVote = row.vote as 1 | -1;
+  }
+
+  return result;
+}
+
+// Vote on a reply. Pass null to remove vote.
+export async function voteOnReply(replyId: string, vote: 1 | -1 | null): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  // Always delete first (handles both removal and changing vote direction)
+  await supabase
+    .from('reply_votes')
+    .delete()
+    .eq('reply_id', replyId)
+    .eq('user_id', user.id);
+
+  if (vote === null) return true;
+
+  const { error } = await supabase
+    .from('reply_votes')
+    .insert({ reply_id: replyId, user_id: user.id, vote });
+
+  if (error) {
+    // PGRST205 = table not found; silently skip until migration is run
+    if (error.code !== 'PGRST205') console.error('Error voting on reply:', error.message, error.code);
+    return false;
+  }
+  return true;
 }
 
 // Delete a reply

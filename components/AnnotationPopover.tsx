@@ -34,6 +34,7 @@ interface AnnotationPopoverProps {
   onReplyTextChange: (text: string) => void;
   onReplyAnonymousChange: (anonymous: boolean) => void;
   onSubmitReply: (annotationId: string) => void;
+  onVote?: (replyId: string, vote: 1 | -1 | null) => void;
 }
 
 export default function AnnotationPopover({
@@ -54,6 +55,7 @@ export default function AnnotationPopover({
   onReplyTextChange,
   onReplyAnonymousChange,
   onSubmitReply,
+  onVote,
 }: AnnotationPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -349,6 +351,7 @@ export default function AnnotationPopover({
               onReplyAnonymousChange={onReplyAnonymousChange}
               onSubmitReply={onSubmitReply}
               nestedReplies={children[reply.id] || []}
+              onVote={onVote}
             />
           ))}
         </div>

@@ -11,7 +11,7 @@ import {
 import { Document, Page, pdfjs } from "react-pdf";
 import { useAuth } from "@/lib/AuthContext";
 import { loadAnnotations, saveAnnotation, deleteAnnotation, deleteAnnotations } from "@/lib/annotations";
-import { loadReplies, saveReply, deleteReply, Reply } from "@/lib/replies";
+import { loadReplies, saveReply, deleteReply, getVotesForReplies, voteOnReply, Reply } from "@/lib/replies";
 import CommentModal from "./CommentModal";
 import AnnotationPopover from "./AnnotationPopover";
 import SelectionToolbar from "./SelectionToolbar";
@@ -468,10 +468,43 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
     [annotations, pageNumber]
   );
 
-  // Load replies for an annotation
+  // Load replies for an annotation (with vote counts)
   const loadAnnotationReplies = async (annotationId: string) => {
     const annotationReplies = await loadReplies(annotationId);
-    setReplies((prev) => ({ ...prev, [annotationId]: annotationReplies }));
+    const userId = user?.id;
+    const replyIds = annotationReplies.map((r) => r.id);
+    const votesMap = await getVotesForReplies(replyIds, userId);
+    const enriched = annotationReplies.map((r) => {
+      const v = votesMap.get(r.id);
+      return { ...r, upvotes: v?.upvotes ?? 0, downvotes: v?.downvotes ?? 0, userVote: v?.userVote ?? null };
+    });
+    setReplies((prev) => ({ ...prev, [annotationId]: enriched }));
+  };
+
+  // Handle voting on a reply
+  const handleVoteOnReply = async (replyId: string, vote: 1 | -1 | null) => {
+    if (!user) return;
+    // Find which annotation this reply belongs to
+    const annotationId = Object.keys(replies).find((aid) =>
+      replies[aid]?.some((r) => r.id === replyId)
+    );
+    if (!annotationId) return;
+    // Optimistic update
+    setReplies((prev) => ({
+      ...prev,
+      [annotationId]: (prev[annotationId] || []).map((r) => {
+        if (r.id !== replyId) return r;
+        const prevVote = r.userVote ?? null;
+        let upvotes = r.upvotes ?? 0;
+        let downvotes = r.downvotes ?? 0;
+        if (prevVote === 1) upvotes--;
+        if (prevVote === -1) downvotes--;
+        if (vote === 1) upvotes++;
+        if (vote === -1) downvotes++;
+        return { ...r, upvotes, downvotes, userVote: vote };
+      }),
+    }));
+    await voteOnReply(replyId, vote);
   };
 
   // Handle submitting a reply
@@ -531,17 +564,17 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
               style={{
                 width: "32px",
                 height: "32px",
-                background: "rgba(100, 255, 150, 0.2)",
+                background: "rgba(100, 255, 150, 0.15)",
                 borderRadius: "8px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 color: "#64FF96",
-                fontWeight: "bold",
-                fontSize: "18px",
               }}
             >
-              U
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+              </svg>
             </div>
             <span
               style={{
@@ -551,7 +584,7 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
                 letterSpacing: "-0.02em",
               }}
             >
-              UNIVAULT
+              FORUM
             </span>
           </a>
         </div>
@@ -627,76 +660,10 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
           <div style={{ display: "flex", alignItems: "flex-start", gap: twoPageView ? "16px" : "0" }}>
 
             {/* ── Left / single page ── */}
-            <div
-              ref={pageWrapRef}
-              className="relative bg-white"
-              style={{
-                width: renderSize ? `${renderSize.w}px` : "auto",
-                height: renderSize ? `${renderSize.h}px` : "auto",
-                borderRadius: "10px",
-                boxShadow: "0 0 0 1px rgba(255,255,255,0.08), 0 8px 40px rgba(0,0,0,0.8), 0 0 80px rgba(100,255,150,0.08)",
-                overflow: "hidden",
-              }}
-            >
-              {loadErr && <div className="p-4 text-sm text-red-600 break-all border-b">{loadErr}</div>}
-              <Document
-                key={resolvedPdfUrl}
-                file={resolvedPdfUrl}
-                onLoadSuccess={onDocumentLoadSuccess}
-                onLoadError={(err) => setLoadErr(`PDF load error: ${String(err)}`)}
-                onSourceError={(err) => setLoadErr(`PDF source error: ${String(err)}`)}
-                loading={<div className="flex items-center justify-center h-[60vh] w-[40vw]"><div className="text-gray-500">Loading PDF...</div></div>}
-                error={<div className="flex items-center justify-center h-[60vh] w-[40vw]"><div className="text-red-500">Error loading PDF.</div></div>}
-              >
-                <Page pageNumber={pageNumber} width={renderSize?.w} renderTextLayer renderAnnotationLayer onLoadSuccess={onPageLoadSuccess} onRenderSuccess={() => syncCanvasToPage()} />
-              </Document>
-
-              {/* Highlights */}
-              <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 6 }}>
-                {highlightAnnotations.flatMap((a) => {
-                  const data = a.data as HighlightData;
-                  const color = a.color || data?.color || "rgba(255,235,59,0.50)";
-                  return (data?.rects || []).map((r, i) => (
-                    <div key={`${a.id}-${i}`} className="absolute rounded-sm cursor-pointer hover:opacity-75 transition-opacity pointer-events-auto"
-                      style={{ left: `${r.x*100}%`, top: `${r.y*100}%`, width: `${r.w*100}%`, height: `${r.h*100}%`, background: color }}
-                      title={data?.selectedText ? `Click to delete: "${data.selectedText}"` : "Click to delete"}
-                      onClick={(e) => { e.stopPropagation(); if (user) deleteAnnotation(a.id).then((ok) => { if (ok) setAnnotations((p) => p.filter((x) => x.id !== a.id)); }); }}
-                    />
-                  ));
-                })}
-              </div>
-
-              {/* Pen canvas */}
-              <canvas ref={canvasRef} className="absolute inset-0" style={{ zIndex: 7, pointerEvents: "none" }} />
-
-              {/* Comment markers */}
-              {textAnnotations.map((annotation, index) => (
-                <div key={annotation.id}
-                  className="absolute bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold cursor-pointer hover:bg-purple-700 shadow-lg"
-                  style={{ left: annotation.data?.position?.x ?? 0, top: annotation.data?.position?.y ?? 0, transform: "translate(-50%,-50%)", zIndex: 10 }}
-                  title={`Comment ${index + 1}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveAnnotationId(annotation.id);
-                    setCommentSidebarOpen(true);
-                    if (!replies[annotation.id]) loadAnnotationReplies(annotation.id);
-                  }}
-                >{index + 1}</div>
-              ))}
-
-              {/* Navigation zones — left edge back, right edge forward (only in single-page or as fallback) */}
-              {pageNumber > 1 && (
-                <div className="absolute left-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "w-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(twoPageView ? -2 : -1)} />
-              )}
-              {(!twoPageView || pageNumber + 1 > numPages) && pageNumber < numPages && (
-                <div className="absolute right-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "e-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(twoPageView ? 2 : 1)} />
-              )}
-            </div>
-
-            {/* ── Right page (two-page mode) ── */}
-            {twoPageView && pageNumber + 1 <= numPages && (
+            {/* Outer wrapper: position:relative so margin overlay can escape overflow:hidden */}
+            <div style={{ position: "relative", flexShrink: 0 }}>
               <div
-                ref={rightPageWrapRef}
+                ref={pageWrapRef}
                 className="relative bg-white"
                 style={{
                   width: renderSize ? `${renderSize.w}px` : "auto",
@@ -706,44 +673,199 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
                   overflow: "hidden",
                 }}
               >
-                <Document key={resolvedPdfUrl} file={resolvedPdfUrl} onLoadSuccess={() => {}} loading={null} error={null}>
-                  <Page pageNumber={pageNumber + 1} width={renderSize?.w} renderTextLayer renderAnnotationLayer />
+                {loadErr && <div className="p-4 text-sm text-red-600 break-all border-b">{loadErr}</div>}
+                <Document
+                  key={resolvedPdfUrl}
+                  file={resolvedPdfUrl}
+                  onLoadSuccess={onDocumentLoadSuccess}
+                  onLoadError={(err) => setLoadErr(`PDF load error: ${String(err)}`)}
+                  onSourceError={(err) => setLoadErr(`PDF source error: ${String(err)}`)}
+                  loading={<div className="flex items-center justify-center h-[60vh] w-[40vw]"><div className="text-gray-500">Loading PDF...</div></div>}
+                  error={<div className="flex items-center justify-center h-[60vh] w-[40vw]"><div className="text-red-500">Error loading PDF.</div></div>}
+                >
+                  <Page pageNumber={pageNumber} width={renderSize?.w} renderTextLayer renderAnnotationLayer onLoadSuccess={onPageLoadSuccess} onRenderSuccess={() => syncCanvasToPage()} />
                 </Document>
 
-                {/* Highlights for right page */}
+                {/* Highlights */}
                 <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 6 }}>
-                  {highlightAnnotationsRight.flatMap((a) => {
+                  {highlightAnnotations.flatMap((a) => {
                     const data = a.data as HighlightData;
                     const color = a.color || data?.color || "rgba(255,235,59,0.50)";
                     return (data?.rects || []).map((r, i) => (
-                      <div key={`${a.id}-${i}`} className="absolute rounded-sm cursor-pointer hover:opacity-75 transition-opacity pointer-events-auto"
-                        style={{ left: `${r.x*100}%`, top: `${r.y*100}%`, width: `${r.w*100}%`, height: `${r.h*100}%`, background: color }}
-                        title={data?.selectedText ? `Click to delete: "${data.selectedText}"` : "Click to delete"}
+                      <div key={`${a.id}-${i}`} className="absolute pointer-events-auto"
+                        style={{
+                          left: `${r.x*100}%`, top: `${r.y*100}%`,
+                          width: `${r.w*100}%`, height: `${r.h*100}%`,
+                          background: color,
+                          cursor: "pointer",
+                          transition: "opacity 0.1s",
+                        }}
+                        title={data?.selectedText ? `"${data.selectedText}" — click to remove` : "Click to remove"}
+                        onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.5")}
+                        onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
                         onClick={(e) => { e.stopPropagation(); if (user) deleteAnnotation(a.id).then((ok) => { if (ok) setAnnotations((p) => p.filter((x) => x.id !== a.id)); }); }}
                       />
                     ));
                   })}
                 </div>
 
-                {/* Comment markers for right page */}
+                {/* Pen canvas */}
+                <canvas ref={canvasRef} className="absolute inset-0" style={{ zIndex: 7, pointerEvents: "none" }} />
+
+                {/* Navigation zones */}
+                {pageNumber > 1 && (
+                  <div className="absolute left-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "w-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(twoPageView ? -2 : -1)} />
+                )}
+                {(!twoPageView || pageNumber + 1 > numPages) && pageNumber < numPages && (
+                  <div className="absolute right-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "e-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(twoPageView ? 2 : 1)} />
+                )}
+              </div>
+
+              {/* Comment markers — in left margin, outside overflow:hidden */}
+              {textAnnotations.map((annotation, index) => (
+                <div key={annotation.id}
+                  style={{
+                    position: "absolute",
+                    right: "calc(100% + 8px)",
+                    top: annotation.data?.position?.y ?? 0,
+                    transform: "translateY(-50%)",
+                    zIndex: 20,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                  title={annotation.comment || `Comment ${index + 1}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveAnnotationId(annotation.id);
+                    setCommentSidebarOpen(true);
+                    setExpandedComments((prev) => new Set([...prev, annotation.id]));
+                    if (!replies[annotation.id]) loadAnnotationReplies(annotation.id);
+                  }}
+                >
+                  {/* Badge */}
+                  <div style={{
+                    height: "20px",
+                    minWidth: "20px",
+                    borderRadius: "10px",
+                    background: "#1a3d2e",
+                    border: "1px solid rgba(100,255,150,0.35)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "0 5px",
+                    boxShadow: "0 1px 6px rgba(0,0,0,0.3)",
+                    transition: "background 0.12s, border-color 0.12s",
+                  }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#2d6b4e"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(100,255,150,0.7)"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#1a3d2e"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(100,255,150,0.35)"; }}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="#64FF96">
+                      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                  </div>
+                  {/* Connector line pointing right toward page */}
+                  <div style={{ width: "6px", height: "1px", background: "rgba(100,255,150,0.4)" }} />
+                </div>
+              ))}
+            </div>
+
+            {/* ── Right page (two-page mode) ── */}
+            {twoPageView && pageNumber + 1 <= numPages && (
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <div
+                  ref={rightPageWrapRef}
+                  className="relative bg-white"
+                  style={{
+                    width: renderSize ? `${renderSize.w}px` : "auto",
+                    height: renderSize ? `${renderSize.h}px` : "auto",
+                    borderRadius: "10px",
+                    boxShadow: "0 0 0 1px rgba(255,255,255,0.08), 0 8px 40px rgba(0,0,0,0.8), 0 0 80px rgba(100,255,150,0.08)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <Document key={resolvedPdfUrl} file={resolvedPdfUrl} onLoadSuccess={() => {}} loading={null} error={null}>
+                    <Page pageNumber={pageNumber + 1} width={renderSize?.w} renderTextLayer renderAnnotationLayer />
+                  </Document>
+
+                  {/* Highlights for right page */}
+                  <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 6 }}>
+                    {highlightAnnotationsRight.flatMap((a) => {
+                      const data = a.data as HighlightData;
+                      const color = a.color || data?.color || "rgba(255,235,59,0.50)";
+                      return (data?.rects || []).map((r, i) => (
+                        <div key={`${a.id}-${i}`} className="absolute pointer-events-auto"
+                          style={{
+                            left: `${r.x*100}%`, top: `${r.y*100}%`,
+                            width: `${r.w*100}%`, height: `${r.h*100}%`,
+                            background: color,
+                            cursor: "pointer",
+                            transition: "opacity 0.1s",
+                          }}
+                          title={data?.selectedText ? `"${data.selectedText}" — click to remove` : "Click to remove"}
+                          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.5")}
+                          onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+                          onClick={(e) => { e.stopPropagation(); if (user) deleteAnnotation(a.id).then((ok) => { if (ok) setAnnotations((p) => p.filter((x) => x.id !== a.id)); }); }}
+                        />
+                      ));
+                    })}
+                  </div>
+
+                  {/* Right-edge forward navigation */}
+                  {pageNumber + 1 < numPages && (
+                    <div className="absolute right-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "e-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(2)} />
+                  )}
+                </div>
+
+                {/* Comment markers — in right margin, outside overflow:hidden */}
                 {textAnnotationsRight.map((annotation, index) => (
                   <div key={annotation.id}
-                    className="absolute bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold cursor-pointer hover:bg-purple-700 shadow-lg"
-                    style={{ left: annotation.data?.position?.x ?? 0, top: annotation.data?.position?.y ?? 0, transform: "translate(-50%,-50%)", zIndex: 10 }}
-                    title={`Comment ${index + 1}`}
+                    style={{
+                      position: "absolute",
+                      left: "calc(100% + 8px)",
+                      top: annotation.data?.position?.y ?? 0,
+                      transform: "translateY(-50%)",
+                      zIndex: 20,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                    title={annotation.comment || `Comment ${index + 1}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveAnnotationId(annotation.id);
                       setCommentSidebarOpen(true);
+                      setExpandedComments((prev) => new Set([...prev, annotation.id]));
                       if (!replies[annotation.id]) loadAnnotationReplies(annotation.id);
                     }}
-                  >{index + 1}</div>
+                  >
+                    {/* Connector line */}
+                    <div style={{ width: "6px", height: "1px", background: "rgba(100,255,150,0.4)" }} />
+                    {/* Badge */}
+                    <div style={{
+                      height: "20px",
+                      minWidth: "20px",
+                      borderRadius: "10px",
+                      background: "#1a3d2e",
+                      border: "1px solid rgba(100,255,150,0.35)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "0 5px",
+                      boxShadow: "0 1px 6px rgba(0,0,0,0.3)",
+                      transition: "background 0.12s, border-color 0.12s",
+                    }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#2d6b4e"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(100,255,150,0.7)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#1a3d2e"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(100,255,150,0.35)"; }}
+                    >
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="#64FF96">
+                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+                      </svg>
+                    </div>
+                  </div>
                 ))}
-
-                {/* Right-edge forward navigation */}
-                {pageNumber + 1 < numPages && (
-                  <div className="absolute right-0 top-0 bottom-0" style={{ width: "8%", zIndex: 15, cursor: "e-resize", userSelect: "none" }} onMouseDown={(e) => e.preventDefault()} onClick={() => changePage(2)} />
-                )}
               </div>
             )}
 
@@ -935,6 +1057,7 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
                   onReplyTextChange={setReplyText}
                   onReplyAnonymousChange={setReplyAnonymous}
                   onSubmitReply={handleSubmitReply}
+                  onVote={handleVoteOnReply}
                 />
               </>
             ) : (
@@ -1016,6 +1139,7 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
                       key={annotation.id}
                       onClick={() => {
                         setActiveAnnotationId(annotation.id);
+                        setExpandedComments((prev) => new Set([...prev, annotation.id]));
                         if (!replies[annotation.id]) loadAnnotationReplies(annotation.id);
                       }}
                       style={{
@@ -1073,6 +1197,28 @@ export default function PDFViewer({ pdfUrl, bookId, title, author }: PDFViewerPr
                       }}>
                         {annotation.comment}
                       </p>
+                      {/* Reply/vote summary */}
+                      {replies[annotation.id] && replies[annotation.id].length > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "6px" }}>
+                          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "11px" }}>
+                            {replies[annotation.id].length} {replies[annotation.id].length === 1 ? "reply" : "replies"}
+                          </span>
+                          {(() => {
+                            const totalScore = replies[annotation.id].reduce(
+                              (sum, r) => sum + (r.upvotes ?? 0) - (r.downvotes ?? 0), 0
+                            );
+                            return totalScore !== 0 ? (
+                              <span style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                color: totalScore > 0 ? "#ff4500" : "#7193ff",
+                              }}>
+                                {totalScore > 0 ? "+" : ""}{totalScore}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

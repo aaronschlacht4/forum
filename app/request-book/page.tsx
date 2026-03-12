@@ -51,17 +51,17 @@ export default function RequestBookPage() {
               style={{
                 width: "32px",
                 height: "32px",
-                background: "rgba(100, 255, 150, 0.2)",
+                background: "rgba(100, 255, 150, 0.15)",
                 borderRadius: "8px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 color: "#64FF96",
-                fontWeight: "bold",
-                fontSize: "18px",
               }}
             >
-              U
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+              </svg>
             </div>
             <span
               style={{
@@ -71,7 +71,7 @@ export default function RequestBookPage() {
                 letterSpacing: "-0.02em",
               }}
             >
-              UNIVAULT
+              FORUM
             </span>
           </a>
         </div>

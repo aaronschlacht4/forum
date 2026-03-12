@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import SpinningBook from "@/components/SpinningBook";
-import ThreadCard from "@/components/ThreadCard";
-import ShelfScene, { BookData } from "@/components/ShelfScene";
+import LiveDiscussionDemo from "@/components/LiveDiscussionDemo";
 import AuthModal from "@/components/AuthModal";
 import { useAuth } from "@/lib/AuthContext";
 
@@ -16,39 +15,10 @@ const categoryMapping: Record<string, string> = {
   "the art of war": "Strategy",
 };
 
-const sampleThreads = [
-  {
-    author: "Sarah Mitchell",
-    time: "2 hours ago",
-    title: "The existential crisis in Crime and Punishment",
-    preview: "I just finished reading Dostoevsky's masterpiece and I'm struck by how Raskolnikov's internal struggle mirrors our modern anxiety...",
-    replies: 24,
-    likes: 156,
-  },
-  {
-    author: "James Chen",
-    time: "5 hours ago",
-    title: "Why Atomic Habits changed my productivity system",
-    preview: "After implementing James Clear's 1% improvement philosophy, I've seen remarkable changes in my daily routine. Here's what worked...",
-    replies: 18,
-    likes: 203,
-  },
-  {
-    author: "Emma Rodriguez",
-    time: "1 day ago",
-    title: "Comparing Orwell's vision to our digital age",
-    preview: "1984 feels more relevant than ever. Let's discuss the parallels between Big Brother and modern surveillance capitalism...",
-    replies: 67,
-    likes: 421,
-  },
-];
-
 export default function HomePage() {
-  const [books, setBooks] = useState<BookData[]>([]);
-  const [featuredBooks, setFeaturedBooks] = useState<BookData[]>([]);
-  const [showLibrary, setShowLibrary] = useState(false);
+  const [books, setBooks] = useState<{ id: string; title?: string; cover_path?: string; pdfUrl?: string }[]>([]);
+  const [featuredBooks, setFeaturedBooks] = useState<{ id: string; title?: string; cover_path?: string; pdfUrl?: string }[]>([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const libraryRef = useRef<HTMLDivElement>(null);
   const { user, signOut, loading } = useAuth();
 
   useEffect(() => {
@@ -82,34 +52,17 @@ export default function HomePage() {
 
   useEffect(() => {
     const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setShowLibrary(true);
-          }
-        });
-      },
-      { threshold: 0.1 }
+      (entries) => entries.forEach((e) => e.target.classList.toggle("visible", e.isIntersecting)),
+      { threshold: 0.08, rootMargin: "0px 0px -60px 0px" }
     );
-
-    if (libraryRef.current) {
-      observer.observe(libraryRef.current);
-    }
-
+    document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
     return () => observer.disconnect();
   }, []);
 
-  const visibleBooks =
-    books.length > 0
-      ? books
-      : Array.from({ length: 12 }).map((_, i) => ({
-          id: `fallback-${i}`,
-          title: `Book ${i + 1}`,
-          author: "Author",
-        }));
+
 
   // Get category for a book based on title
-  const getCategoryForBook = (book: BookData): string => {
+  const getCategoryForBook = (book: { id: string; title?: string; cover_path?: string; pdfUrl?: string }): string => {
     const title = book.title?.toLowerCase() || "";
 
     // Try exact matches first
@@ -152,16 +105,16 @@ export default function HomePage() {
             <div style={{
               width: "32px",
               height: "32px",
-              background: "rgba(100, 255, 150, 0.2)",
+              background: "rgba(100, 255, 150, 0.15)",
               borderRadius: "8px",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               color: "#64FF96",
-              fontWeight: "bold",
-              fontSize: "18px"
             }}>
-              U
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+              </svg>
             </div>
             <span style={{
               color: "#ffffff",
@@ -169,7 +122,7 @@ export default function HomePage() {
               fontSize: "16px",
               letterSpacing: "-0.02em"
             }}>
-              UNIVAULT
+              FORUM
             </span>
           </a>
         </div>
@@ -196,7 +149,7 @@ export default function HomePage() {
               letterSpacing: "-0.01em"
             }}
           >
-            Enterprise
+            Library
           </a>
           <a
             href="#pricing"
@@ -317,7 +270,7 @@ export default function HomePage() {
           </a>
 
           <h1
-            className="mb-8 text-8xl font-bold tracking-tight sm:text-9xl"
+            className="reveal mb-8 text-8xl font-bold tracking-tight sm:text-9xl"
             style={{
               fontFamily: "'Crimson Text', serif",
               fontWeight: 400,
@@ -330,7 +283,7 @@ export default function HomePage() {
         </div>
 
         {/* Spinning Books Carousel */}
-        <div className="relative z-10 mb-20 grid grid-cols-2 gap-8 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="reveal reveal-delay-2 relative z-10 mb-20 grid grid-cols-2 gap-8 sm:grid-cols-3 lg:grid-cols-5">
           {featuredBooks.length > 0 ? (
             featuredBooks.map((book, index) => (
               <SpinningBook
@@ -371,10 +324,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Threads Section */}
+      {/* Live Discussion Section */}
       <section className="px-8 py-20">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-12 text-center">
+          <div className="reveal mb-12 text-center">
             <h2
               className="mb-4 text-5xl font-bold tracking-tight"
               style={{
@@ -384,7 +337,7 @@ export default function HomePage() {
                 textShadow: "1px 1px 2px rgba(0,0,0,0.2)"
               }}
             >
-              Active Discussions
+              Live Discussions
             </h2>
             <p
               className="text-lg"
@@ -393,69 +346,16 @@ export default function HomePage() {
                 color: "#2D2D2D"
               }}
             >
-              Join the conversation with fellow readers and thinkers
+              Real conversations happening right now in the vault
             </p>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {sampleThreads.map((thread, index) => (
-              <ThreadCard key={index} {...thread} />
-            ))}
-          </div>
-
-          <div className="mt-12 text-center">
-            <button className="rounded-full bg-gray-900 px-8 py-4 font-semibold text-white transition hover:bg-gray-800">
-              View All Discussions
-            </button>
+          <div className="reveal reveal-delay-1">
+            <LiveDiscussionDemo />
           </div>
         </div>
       </section>
 
-      {/* 3D Library Section */}
-      <section
-        ref={libraryRef}
-        className="px-8 py-20"
-      >
-        <div className="mx-auto max-w-7xl">
-          <div className="mb-12 text-center">
-            <h2
-              className="mb-4 text-5xl font-bold tracking-tight"
-              style={{
-                fontFamily: "'Crimson Text', serif",
-                fontWeight: 400,
-                color: "#000000",
-                textShadow: "1px 1px 2px rgba(0,0,0,0.2)"
-              }}
-            >
-              Your Library
-            </h2>
-            <p
-              className="text-lg"
-              style={{
-                fontFamily: "'Crimson Text', serif",
-                color: "#2D2D2D"
-              }}
-            >
-              Explore your collection in immersive 3D
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-gray-200 bg-white p-8 shadow-xl">
-            <div className="h-[80vh] min-h-[600px] w-full overflow-hidden rounded-2xl bg-gray-50">
-              {showLibrary && <ShelfScene books={visibleBooks} />}
-            </div>
-          </div>
-
-          <div className="mt-8 text-center">
-            <a
-              href="/library"
-              className="inline-block rounded-full bg-gray-900 px-8 py-4 font-semibold text-white transition hover:bg-gray-800"
-            >
-              Open Full Library View
-            </a>
-          </div>
-        </div>
-      </section>
 
       {/* Footer */}
       <footer className="px-8 py-12" style={{ backgroundColor: "#3D3D3D", color: "#FFFFFF" }}>
