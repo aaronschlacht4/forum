@@ -12,6 +12,13 @@ import {
 import { Canvas, useThree } from "@react-three/fiber";
 import { Environment, Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import {
+  BOOK_MODEL_URL,
+  applyBlankCover,
+  applyCoverTexture,
+  coverUrlFor,
+  measureBookBody,
+} from "@/lib/bookModel";
 
 export type BookData = {
   id: string;
@@ -33,7 +40,33 @@ export const SHELF_CATEGORIES = [
 
 const N_ROWS = SHELF_CATEGORIES.reduce((s, c) => s + c.rows, 0); // 10
 const BG = "#140d04";
-const SUPABASE_COVERS = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/object/public/covers`;
+
+/* ---- Shelf layout ----
+ * shelfv2.glb is a compartment open at the front — floor, back and two sides,
+ * no front face. Books stand inside it on the floor, so rows stay contiguous:
+ * each compartment sits directly on the one below and the stack reads as one
+ * bookcase. */
+
+// Book height as a fraction of the compartment's height.
+const BOOK_FILL = 0.86;
+// Book depth as a fraction of the compartment's depth, so nothing overhangs.
+const DEPTH_FILL = 0.9;
+// Quarter turn that swings the model's spine round to face the reader.
+const SPINE_OUT_YAW = Math.PI / 2;
+// Lift off the floor, as a fraction of compartment height — clears z-fighting.
+const FLOOR_INSET = 0.012;
+// How far a book's face sits back from the open front, as a fraction of depth.
+const FRONT_INSET = 0.15;
+// Clear space at each end of a row, as a fraction of shelf width.
+const SIDE_MARGIN = 0.04;
+// Gap between neighbouring books, as a fraction of one book's width.
+const BOOK_GAP = 0.08;
+// Guard against a pathological row trying to build thousands of clones.
+const MAX_BOOKS_PER_ROW = 24;
+
+// Camera framing: fit the shelf width, with a little air around it.
+const CAMERA_FOV = 50;
+const FRAME_MARGIN = 1.12;
 
 /* ---- Loading ---- */
 
@@ -47,49 +80,54 @@ function Loading() {
   );
 }
 
-/* ---- Geometry helpers ---- */
+/* ---- Book measurements — the model is identical for every book ---- */
 
-function normalizeToOriginBottom(obj: THREE.Object3D) {
-  obj.updateMatrixWorld(true);
-  let box = new THREE.Box3().setFromObject(obj);
-  obj.position.sub(box.getCenter(new THREE.Vector3()));
-  obj.updateMatrixWorld(true);
-  box = new THREE.Box3().setFromObject(obj);
-  obj.position.y -= box.min.y;
-  obj.updateMatrixWorld(true);
+type BookMetrics = {
+  size: THREE.Vector3;
+  centre: THREE.Vector3;
+  bottom: number;
+};
+
+function useBookMetrics(): BookMetrics {
+  const { scene } = useGLTF(BOOK_MODEL_URL);
+  return useMemo(() => {
+    const body = measureBookBody(scene.clone(true));
+    return {
+      size: body.getSize(new THREE.Vector3()),
+      centre: body.getCenter(new THREE.Vector3()),
+      bottom: body.min.y,
+    };
+  }, [scene]);
 }
 
-function applyCoverTexture(
-  bookRoot: THREE.Object3D,
-  tex: THREE.Texture,
-  maxAnisotropy: number
-) {
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.flipY = false;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.anisotropy = maxAnisotropy;
-  tex.needsUpdate = true;
-  bookRoot.traverse((o: any) => {
-    if (!o.isMesh) return;
-    const mat = (
-      (o.material as THREE.MeshStandardMaterial)?.clone?.() ??
-      new THREE.MeshStandardMaterial()
-    ) as THREE.MeshStandardMaterial;
-    mat.map = tex;
-    mat.color.set(0xffffff);
-    mat.roughness = 0.75;
-    mat.metalness = 0.05;
-    mat.polygonOffset = true;
-    mat.polygonOffsetFactor = -1;
-    mat.polygonOffsetUnits = -4;
-    mat.side = THREE.FrontSide;
-    mat.depthWrite = mat.depthTest = true;
-    mat.needsUpdate = true;
-    o.material = mat;
-  });
+/**
+ * Where a row's books sit and how big they are.
+ *
+ * Books stand spine-out, shelved the way they would be in a library, so the
+ * cover runs front-to-back into the compartment. That makes depth the binding
+ * constraint rather than height: a book sized to fill the opening would be
+ * deeper than the shelf and hang out over the edge, so take whichever of the two
+ * limits is tighter.
+ */
+function shelfLayout(bounds: Bounds, book: BookMetrics) {
+  const byHeight = (bounds.size.y * BOOK_FILL) / Math.max(book.size.y, 1e-6);
+  const byDepth = (bounds.size.z * DEPTH_FILL) / Math.max(book.size.x, 1e-6);
+  const scale = Math.min(byHeight, byDepth);
+  const depth = book.size.x * scale;
+
+  // Sit the spines near the opening, but never so far forward that the book's
+  // back pushes out through the back panel — turned spine-out it runs nearly the
+  // full depth of the compartment, so there is little room to give.
+  const nearFront = bounds.box.max.z - depth / 2 - bounds.size.z * FRONT_INSET;
+  const againstBack = bounds.box.min.z + depth / 2;
+
+  return {
+    scale,
+    // Turned spine-out, a book takes up its own thickness along the shelf.
+    width: book.size.z * scale,
+    restY: bounds.box.min.y + bounds.size.y * FLOOR_INSET,
+    restZ: Math.max(nearFront, againstBack),
+  };
 }
 
 /* ---- Shelf mesh ---- */
@@ -154,14 +192,46 @@ function ShelfMesh({
   return <primitive object={shelf} />;
 }
 
-/* ---- Books — packed right-to-left ---- */
+/* ---- Cover textures, shared by every row ----
+ * Keyed by URL, not by book id, and only ever holding a settled result: a
+ * Texture, or null once the fetch has failed. Keying by id and parking a null
+ * in the cache to mean "loading" made a rebuilt row read that null as "missing"
+ * and skip the book forever, while the in-flight load dressed a clone that had
+ * already been thrown away. */
+const coverCache = new Map<string, THREE.Texture | null>();
+const coverLoads = new Map<string, Promise<THREE.Texture | null>>();
+
+function loadCover(
+  loader: THREE.TextureLoader,
+  url: string
+): Promise<THREE.Texture | null> {
+  let pending = coverLoads.get(url);
+  if (!pending) {
+    pending = new Promise<THREE.Texture | null>((resolve) => {
+      loader.load(
+        url,
+        (tex) => { coverCache.set(url, tex); resolve(tex); },
+        undefined,
+        () => {
+          coverCache.set(url, null);
+          console.warn(`[shelf] cover failed to load: ${url}`);
+          resolve(null);
+        }
+      );
+    });
+    coverLoads.set(url, pending);
+  }
+  return pending;
+}
+
+/* ---- Books — standing face-out on the shelf floor ---- */
 
 function ShelfBooks({ books, bounds }: { books: BookData[]; bounds: Bounds }) {
-  const { scene: baseScene } = useGLTF("/models/book.glb");
-  const { gl } = useThree();
+  const { scene: baseScene } = useGLTF(BOOK_MODEL_URL);
+  const book = useBookMetrics();
+  const { gl, invalidate } = useThree();
   const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
   const texLoader = useMemo(() => new THREE.TextureLoader(), []);
-  const texCache = useRef<Record<string, THREE.Texture | null | undefined>>({});
   const router = useRouter();
   const [hovered, setHovered] = useState(false);
 
@@ -172,87 +242,78 @@ function ShelfBooks({ books, bounds }: { books: BookData[]; bounds: Bounds }) {
 
   const placed = useMemo(() => {
     if (!books.length) return [];
-    const { box, size, center } = bounds;
-    const margin = size.x * 0.08;
-    const endX   = box.max.x - margin;
-    const startX = box.min.x + margin;
-    const span   = endX - startX;
-    const floorY = box.min.y + size.y * 0.02;
-    const z      = center.z;
 
-    const proto = baseScene.clone(true);
-    normalizeToOriginBottom(proto);
-    proto.updateMatrixWorld(true);
-    const protoH = new THREE.Box3()
-      .setFromObject(proto)
-      .getSize(new THREE.Vector3()).y;
-    const baseScale = (size.y * 1.05) / Math.max(protoH, 1e-6);
-    const n = Math.min(books.length, 40);
+    const { scale, width, restY, restZ } = shelfLayout(bounds, book);
+    const span = bounds.size.x * (1 - SIDE_MARGIN * 2);
+    if (!(width > 1e-6) || !(scale > 0) || span < width) return [];
 
-    const built = books.slice(0, n).map((b, i) => {
+    // Only place what genuinely fits. The old layout squeezed every book in by
+    // shrinking them all, so one crowded row silently changed the size of its
+    // books; overflow now just stays off the shelf.
+    const gap = width * BOOK_GAP;
+    const capacity = Math.max(1, Math.floor((span + gap) / (width + gap)));
+    const n = Math.min(books.length, capacity, MAX_BOOKS_PER_ROW);
+
+    // Stacked in from the left against a constant gap, the way books actually
+    // sit on a shelf — a half-full row trails off into space rather than
+    // floating its few books out in the middle.
+    const firstX = bounds.center.x - span / 2 + width / 2;
+
+    return books.slice(0, n).map((b, i) => {
       const id = String(b.id ?? `book-${i}`);
-      const wrapper  = new THREE.Group();
-      wrapper.rotation.y = 5;
-      wrapper.rotation.x = Math.PI;
+
       const bookRoot = baseScene.clone(true);
+      measureBookBody(bookRoot); // hides the same stray geometry on this clone
       bookRoot.traverse((o: any) => {
         if (o.isMesh) o.castShadow = o.receiveShadow = true;
       });
-      normalizeToOriginBottom(bookRoot);
+      // Sit the body's bottom centre on the wrapper's origin, so yaw and scale
+      // pivot through the book instead of dragging it off its mark. Subtract
+      // rather than assign, in case the model root carries its own transform.
+      bookRoot.position.x -= book.centre.x;
+      bookRoot.position.y -= book.bottom;
+      bookRoot.position.z -= book.centre.z;
+
+      const wrapper = new THREE.Group();
       wrapper.add(bookRoot);
-      wrapper.scale.setScalar(baseScale * 0.8);
+      // Quarter turn brings the spine — the model's -X face, the middle band of
+      // the jacket — around to meet the reader.
+      wrapper.rotation.y = SPINE_OUT_YAW;
+      wrapper.scale.setScalar(scale);
+      wrapper.position.set(firstX + i * (width + gap), restY, restZ);
       wrapper.updateMatrixWorld(true);
-      const width = new THREE.Box3()
-        .setFromObject(wrapper)
-        .getSize(new THREE.Vector3()).x;
-      return { id, data: b, wrapper, bookRoot, width };
+
+      return { id, data: b, wrapper, bookRoot };
     });
-
-    const gap = size.x * 0.01;
-    const rawTotal = built.reduce((s, b) => s + b.width, 0) + (built.length - 1) * gap;
-    const fit = rawTotal > span ? span / rawTotal : 1;
-    if (fit < 1) {
-      built.forEach((b) => {
-        b.wrapper.scale.multiplyScalar(fit);
-        b.wrapper.updateMatrixWorld(true);
-        b.width = new THREE.Box3()
-          .setFromObject(b.wrapper)
-          .getSize(new THREE.Vector3()).x;
-      });
-    }
-
-    let x = endX;
-    built.forEach((b) => {
-      x -= b.width;
-      b.wrapper.updateMatrixWorld(true);
-      const bb = new THREE.Box3().setFromObject(b.wrapper);
-      b.wrapper.position.y += floorY - bb.min.y + size.y * 0.002;
-      b.wrapper.position.z  = z;
-      b.wrapper.position.x  = x + b.width / 2;
-      x -= gap;
-    });
-
-    return built;
-  }, [books, bounds, baseScene]);
+  }, [books, bounds, baseScene, book]);
 
   useEffect(() => {
+    // Re-runs whenever the row is rebuilt, dressing whichever clones are
+    // current — a cover that arrives late still lands on a live book.
     placed.forEach((p) => {
       if (p.id.startsWith("fallback-")) return;
-      const url = `${SUPABASE_COVERS}/${encodeURIComponent(
-        p.data.cover_path ?? `${p.id}.jpg`
-      )}`;
-      if (texCache.current[p.id] !== undefined) {
-        const t = texCache.current[p.id];
-        if (t) applyCoverTexture(p.bookRoot, t, maxAnisotropy);
+      const url = coverUrlFor({ id: p.id, cover_path: p.data.cover_path });
+      if (!url) return;
+
+      const settled = coverCache.get(url);
+      if (settled) {
+        applyCoverTexture(p.bookRoot, settled, maxAnisotropy);
+        invalidate();
         return;
       }
-      texCache.current[p.id] = null;
-      texLoader.load(url, (t) => {
-        texCache.current[p.id] = t;
-        applyCoverTexture(p.bookRoot, t, maxAnisotropy);
-      }, undefined, () => { texCache.current[p.id] = null; });
+      if (settled === null) {
+        applyBlankCover(p.bookRoot, p.id);
+        invalidate();
+        return;
+      }
+
+      loadCover(texLoader, url).then((tex) => {
+        if (tex) applyCoverTexture(p.bookRoot, tex, maxAnisotropy);
+        else applyBlankCover(p.bookRoot, p.id);
+        invalidate();
+      });
     });
-  }, [placed, texLoader, maxAnisotropy]);
+  }, [placed, texLoader, maxAnisotropy, invalidate]);
 
   return (
     <group>
@@ -285,38 +346,40 @@ function LibraryCamera({
   onMaxScrollY: (v: number) => void;
 }) {
   const { camera, size: vp } = useThree();
-  const distRef = useRef(0);
-  const baseYRef = useRef(0);
   const onMaxScrollYRef = useRef(onMaxScrollY);
   onMaxScrollYRef.current = onMaxScrollY;
 
+  // Framing and placement live in one effect on purpose. Split across two, the
+  // one that computes the distance and the one that moves the camera had
+  // different dependencies, so bounds could arrive without the camera ever
+  // being placed — it sat at the default (0, 0, 5) and the shelf's outer books
+  // fell outside the frame.
   useEffect(() => {
-    if (!shelfBounds) return;
+    if (!shelfBounds || !vp.width || !vp.height) return;
     const cam = camera as THREE.PerspectiveCamera;
-    const totalW = shelfBounds.size.x;
-    const shelfH = shelfBounds.size.y;
     const aspect = vp.width / vp.height;
-    const fovDeg = 50;
-    const fovRad = (fovDeg * Math.PI) / 180;
-    const dist = (totalW / 2) / (aspect * Math.tan(fovRad / 2));
-    const visibleH = dist * 2 * Math.tan(fovRad / 2);
-    const baseY = visibleH / 2;
-    distRef.current = dist;
-    baseYRef.current = baseY;
-    cam.fov = fovDeg;
+    const fovRad = (CAMERA_FOV * Math.PI) / 180;
+    const halfFov = Math.tan(fovRad / 2);
+    // Pull back far enough that the whole shelf width fits, plus a margin so
+    // the end books aren't flush against the edge of the frame.
+    const dist = (shelfBounds.size.x * FRAME_MARGIN) / 2 / (aspect * halfFov);
+    if (!Number.isFinite(dist) || dist <= 0) return;
+
+    const visibleH = dist * 2 * halfFov;
+    const y = visibleH / 2 + cameraY + shelfBounds.box.min.y;
+    const x = shelfBounds.center.x;
+
+    cam.fov = CAMERA_FOV;
     cam.near = 0.1;
     cam.far = 400;
     cam.updateProjectionMatrix();
-    onMaxScrollYRef.current(Math.max(0, N_ROWS * shelfH - visibleH));
-  }, [shelfBounds, camera, vp.width, vp.height]);
+    cam.position.set(x, y, shelfBounds.center.z + dist);
+    cam.lookAt(x, y, shelfBounds.center.z);
 
-  useEffect(() => {
-    if (!distRef.current) return;
-    const cam = camera as THREE.PerspectiveCamera;
-    const y = baseYRef.current + cameraY;
-    cam.position.set(0, y, distRef.current);
-    cam.lookAt(0, y, 0);
-  }, [camera, cameraY]);
+    onMaxScrollYRef.current(
+      Math.max(0, N_ROWS * shelfBounds.size.y - visibleH)
+    );
+  }, [shelfBounds, camera, vp.width, vp.height, cameraY]);
 
   return null;
 }
@@ -335,6 +398,9 @@ function LibraryRows({
   const [shelfBounds, setShelfBounds] = useState<Bounds | null>(null);
   const boundsSet = useRef(false);
 
+  // One compartment per row, stacked flush, so the shelves stay contiguous.
+  const shelfH = shelfBounds?.size.y ?? 0;
+
   const handleBounds = useCallback(
     (b: Bounds) => {
       if (!boundsSet.current) {
@@ -346,8 +412,6 @@ function LibraryRows({
     },
     [onBounds, onShelfH]
   );
-
-  const shelfH = shelfBounds?.size.y ?? 0;
 
   // SHELF_CATEGORIES[0] is the "top" section (highest rows).
   // In world-space, rows stack bottom→top, so we reverse to assign rows.
@@ -636,4 +700,4 @@ export default function ShelfScene({ books }: { books: BookData[] }) {
 }
 
 useGLTF.preload("/models/shelfv2.glb");
-useGLTF.preload("/models/book.glb");
+useGLTF.preload(BOOK_MODEL_URL);

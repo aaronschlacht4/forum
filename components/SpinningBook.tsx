@@ -4,6 +4,13 @@ import React, { useRef, useMemo, useEffect, useState, useLayoutEffect } from "re
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import {
+  BOOK_MODEL_URL,
+  applyCoverTexture,
+  coverUrlFor,
+  measureBookBody,
+  prepareCoverTexture,
+} from "@/lib/bookModel";
 
 interface SpinningBookProps {
   title: string;
@@ -29,34 +36,21 @@ function Book3D({
   const groupRef = useRef<THREE.Group>(null);
   const modelRef = useRef<THREE.Group>(null);
   const targetRotation = useRef({ x: 0, y: 0 });
-  const { scene } = useGLTF("/models/book-card.glb");
+  const { scene } = useGLTF(BOOK_MODEL_URL);
 
   const bookClone = useMemo(() => {
     const clone = scene.clone(true);
+    measureBookBody(clone); // hides the model's stray geometry
 
     clone.traverse((obj: any) => {
       if (obj?.isMesh) {
         obj.castShadow = false;
         obj.receiveShadow = false;
-
-        if (coverTexture) {
-          const mat = new THREE.MeshStandardMaterial({
-            map: coverTexture,
-            color: new THREE.Color(0xffffff),
-            roughness: 0.75,
-            metalness: 0.05,
-          });
-          obj.material = mat;
-          obj.material.needsUpdate = true;
-        } else {
-          obj.material = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(0x8b7355),
-            roughness: 0.8,
-            metalness: 0.1,
-          });
-        }
       }
     });
+
+    // Without artwork the model keeps the pages/binding/jacket it ships with.
+    if (coverTexture) applyCoverTexture(clone, coverTexture, 16);
 
     return clone;
   }, [scene, coverTexture]);
@@ -127,30 +121,32 @@ export default function SpinningBook({
   const [coverTexture, setCoverTexture] = useState<THREE.Texture | null>(null);
   const [hover, setHover] = useState({ x: 0, y: 0 });
 
-  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const SUPABASE_COVERS = `${SUPABASE_URL}/storage/v1/object/public/covers`;
+  const coverUrl = coverUrlFor({ id, cover_path });
 
   useEffect(() => {
+    if (!coverUrl) return;
+    let cancelled = false;
     const loader = new THREE.TextureLoader();
-    const file = cover_path || "frankenstein.jpg";
-    const url = `${SUPABASE_COVERS}/${encodeURIComponent(file)}`;
 
     loader.load(
-      url,
+      coverUrl,
       (texture) => {
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.anisotropy = 16;
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.flipY = false;
-        texture.needsUpdate = true;
-        setCoverTexture(texture);
+        if (cancelled) {
+          texture.dispose();
+          return;
+        }
+        setCoverTexture(prepareCoverTexture(texture, 16));
       },
       undefined,
-      (err) => console.error("Cover texture load failed:", err)
+      (err) => console.error(`Cover texture load failed for ${coverUrl}:`, err)
     );
-  }, [cover_path, SUPABASE_COVERS]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coverUrl]);
+
+  const activeCover = coverUrl ? coverTexture : null;
 
   const hx = clamp(hover.x, -0.18, 0.18);
   const hy = clamp(hover.y, -0.18, 0.18);
@@ -181,7 +177,7 @@ export default function SpinningBook({
           <directionalLight position={[3, 4, 6]} intensity={0.9} />
           <directionalLight position={[-3, 2, 6]} intensity={0.45} />
 
-          <Book3D coverTexture={coverTexture} onHoverChange={(x, y) => setHover({ x, y })} />
+          <Book3D coverTexture={activeCover} onHoverChange={(x, y) => setHover({ x, y })} />
         </Canvas>
       </div>
 
