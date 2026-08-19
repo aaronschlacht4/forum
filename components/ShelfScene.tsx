@@ -26,6 +26,14 @@ export type BookData = {
   author?: string;
   pdfUrl?: string;
   cover_path?: string;
+  /**
+   * Identifies this copy on the shelf rather than the book. A duplicated book
+   * gives two entries sharing an `id`, so this is what keys them apart and what
+   * moving and removal act on.
+   */
+  itemId?: string;
+  /** Slot on the bookcase, counted from the top-left. Gaps are allowed. */
+  slot?: number;
 };
 
 type Bounds = { box: THREE.Box3; size: THREE.Vector3; center: THREE.Vector3 };
@@ -67,6 +75,10 @@ const MAX_BOOKS_PER_ROW = 24;
 // Camera framing: fit the shelf width, with a little air around it.
 const CAMERA_FOV = 50;
 const FRAME_MARGIN = 1.12;
+
+// How far a pointer must travel before a press counts as dragging a book rather
+// than clicking one.
+const DRAG_THRESHOLD_PX = 5;
 
 /* ---- Loading ---- */
 
@@ -128,6 +140,45 @@ function shelfLayout(bounds: Bounds, book: BookMetrics) {
     restY: bounds.box.min.y + bounds.size.y * FLOOR_INSET,
     restZ: Math.max(nearFront, againstBack),
   };
+}
+
+/** Where each book in a row stands, and how many of them fit. */
+function rowSlots(bounds: Bounds, book: BookMetrics, count: number) {
+  const { scale, width, restY, restZ } = shelfLayout(bounds, book);
+  const span = bounds.size.x * (1 - SIDE_MARGIN * 2);
+  if (!(width > 1e-6) || !(scale > 0) || span < width) {
+    return { scale, width, gap: 0, firstX: 0, restY, restZ, capacity: 0, n: 0 };
+  }
+
+  // Only place what genuinely fits. The old layout squeezed every book in by
+  // shrinking them all, so one crowded row silently changed the size of its
+  // books; overflow now just stays off the shelf.
+  const gap = width * BOOK_GAP;
+  const capacity = Math.min(
+    MAX_BOOKS_PER_ROW,
+    Math.max(1, Math.floor((span + gap) / (width + gap)))
+  );
+
+  // Stacked in from the left against a constant gap, the way books actually sit
+  // on a shelf — a half-full row trails off into space rather than floating its
+  // few books out in the middle.
+  const firstX = bounds.center.x - span / 2 + width / 2;
+
+  return {
+    scale,
+    width,
+    gap,
+    firstX,
+    restY,
+    restZ,
+    capacity,
+    n: Math.min(count, capacity),
+  };
+}
+
+/** How many books one shelf holds — used to deal the reading order into rows. */
+export function rowCapacity(bounds: Bounds, book: BookMetrics) {
+  return rowSlots(bounds, book, 0).capacity;
 }
 
 /* ---- Shelf mesh ---- */
@@ -226,41 +277,81 @@ function loadCover(
 
 /* ---- Books — standing face-out on the shelf floor ---- */
 
-function ShelfBooks({ books, bounds }: { books: BookData[]; bounds: Bounds }) {
+function ShelfBooks({
+  books,
+  bounds,
+  shelfH,
+  perRow,
+  editable = false,
+  onMove,
+  onDuplicate,
+  onRemove,
+}: {
+  books: BookData[];
+  bounds: Bounds;
+  shelfH: number;
+  perRow: number;
+  editable?: boolean;
+  onMove?: (from: number, to: number) => void;
+  onDuplicate?: (index: number) => void;
+  onRemove?: (index: number) => void;
+}) {
   const { scene: baseScene } = useGLTF(BOOK_MODEL_URL);
   const book = useBookMetrics();
-  const { gl, invalidate } = useThree();
+  const { gl, camera, invalidate } = useThree();
   const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
   const texLoader = useMemo(() => new THREE.TextureLoader(), []);
   const router = useRouter();
-  const [hovered, setHovered] = useState(false);
+  const [hovered, setHovered] = useState<number | null>(null);
+  // The controls belong to the book the reader picked, not the one the pointer
+  // happens to be over. Hanging them off hover meant they vanished the moment
+  // the pointer set off towards them, so they could never be clicked.
+  const [selected, setSelected] = useState<number | null>(null);
+  const [drag, setDrag] = useState<{ from: number; to: number; x: number; y: number } | null>(null);
+  const dragRef = useRef<{
+    from: number;
+    to: number;
+    moved: boolean;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
-  useEffect(() => {
-    document.body.style.cursor = hovered ? "pointer" : "default";
-    return () => { document.body.style.cursor = "default"; };
-  }, [hovered]);
+  const slots = useMemo(
+    () => rowSlots(bounds, book, books.length),
+    [bounds, book, books.length]
+  );
+
+  // Every book on the bookcase is laid out here rather than a component per
+  // shelf, so a book being dragged can cross from one shelf to another instead
+  // of being trapped in the row that happens to own it.
+  const place = useCallback(
+    (slot: number) => {
+      const pitch = slots.width + slots.gap;
+      const fromTop = perRow > 0 ? Math.floor(slot / perRow) : 0;
+      const column = perRow > 0 ? slot % perRow : 0;
+      return {
+        x: slots.firstX + column * pitch,
+        y: (N_ROWS - 1 - fromTop) * shelfH + slots.restY,
+        z: slots.restZ,
+      };
+    },
+    [slots, perRow, shelfH]
+  );
+
+  /** The slot a book occupies, falling back to reading order for a plain list. */
+  const slotOf = useCallback(
+    (b: BookData, i: number) => b.slot ?? i,
+    []
+  );
+
+  const capacity = Math.max(0, perRow * N_ROWS);
+  const shown = Math.min(books.length, capacity);
 
   const placed = useMemo(() => {
-    if (!books.length) return [];
-
-    const { scale, width, restY, restZ } = shelfLayout(bounds, book);
-    const span = bounds.size.x * (1 - SIDE_MARGIN * 2);
-    if (!(width > 1e-6) || !(scale > 0) || span < width) return [];
-
-    // Only place what genuinely fits. The old layout squeezed every book in by
-    // shrinking them all, so one crowded row silently changed the size of its
-    // books; overflow now just stays off the shelf.
-    const gap = width * BOOK_GAP;
-    const capacity = Math.max(1, Math.floor((span + gap) / (width + gap)));
-    const n = Math.min(books.length, capacity, MAX_BOOKS_PER_ROW);
-
-    // Stacked in from the left against a constant gap, the way books actually
-    // sit on a shelf — a half-full row trails off into space rather than
-    // floating its few books out in the middle.
-    const firstX = bounds.center.x - span / 2 + width / 2;
-
-    return books.slice(0, n).map((b, i) => {
+    if (shown === 0 || slots.width <= 1e-6) return [];
+    return books.slice(0, shown).map((b, i) => {
       const id = String(b.id ?? `book-${i}`);
+      const key = b.itemId ?? `${id}-${i}`;
 
       const bookRoot = baseScene.clone(true);
       measureBookBody(bookRoot); // hides the same stray geometry on this clone
@@ -279,16 +370,15 @@ function ShelfBooks({ books, bounds }: { books: BookData[]; bounds: Bounds }) {
       // Quarter turn brings the spine — the model's -X face, the middle band of
       // the jacket — around to meet the reader.
       wrapper.rotation.y = SPINE_OUT_YAW;
-      wrapper.scale.setScalar(scale);
-      wrapper.position.set(firstX + i * (width + gap), restY, restZ);
+      wrapper.scale.setScalar(slots.scale);
       wrapper.updateMatrixWorld(true);
 
-      return { id, data: b, wrapper, bookRoot };
+      return { id, key, data: b, wrapper, bookRoot };
     });
-  }, [books, bounds, baseScene, book]);
+  }, [books, shown, slots, baseScene, book]);
 
   useEffect(() => {
-    // Re-runs whenever the row is rebuilt, dressing whichever clones are
+    // Re-runs whenever the shelf is rebuilt, dressing whichever clones are
     // current — a cover that arrives late still lands on a live book.
     placed.forEach((p) => {
       if (p.id.startsWith("fallback-")) return;
@@ -315,24 +405,207 @@ function ShelfBooks({ books, bounds }: { books: BookData[]; bounds: Bounds }) {
     });
   }, [placed, texLoader, maxAnisotropy, invalidate]);
 
+  // Slide the shelf apart around whatever is being dragged. Positions are
+  // written straight onto the wrappers so a drag doesn't rebuild every clone.
+  useEffect(() => {
+    const lift = slots.width * 0.5;
+    placed.forEach((p, i) => {
+      const home = place(slotOf(p.data, i));
+      const held = drag?.from === i;
+      p.wrapper.position.set(
+        held ? drag.x : home.x,
+        held ? drag.y + lift : home.y,
+        home.z
+      );
+      p.wrapper.updateMatrixWorld(true);
+    });
+    invalidate();
+  }, [placed, drag, place, slotOf, slots.width, invalidate]);
+
+  /** Where a pointer sits on the face of the bookcase, in world units. */
+  const pointerOnShelf = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const rect = gl.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -(((clientY - rect.top) / rect.height) * 2 - 1)
+      );
+      const caster = new THREE.Raycaster();
+      caster.setFromCamera(ndc, camera);
+      const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -slots.restZ);
+      const hit = new THREE.Vector3();
+      return caster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
+    },
+    [camera, gl, slots.restZ]
+  );
+
+  /**
+   * The slot nearest a point on the bookcase, on any shelf.
+   *
+   * Deliberately not clamped to the number of books: an empty slot is a real
+   * destination, which is what lets a book be moved down to a shelf that has
+   * nothing on it yet.
+   */
+  const slotAt = useCallback(
+    (x: number, y: number) => {
+      if (perRow <= 0) return 0;
+      const pitch = slots.width + slots.gap;
+      const worldRow = Math.round((y - slots.restY) / Math.max(shelfH, 1e-6));
+      const fromTop = Math.max(0, Math.min(N_ROWS - 1, N_ROWS - 1 - worldRow));
+      const column = Math.max(0, Math.min(perRow - 1, Math.round((x - slots.firstX) / pitch)));
+      return fromTop * perRow + column;
+    },
+    [perRow, slots, shelfH]
+  );
+
+  // Keyed on whether a drag is running, not on the drag itself: including the
+  // live pointer position would tear down and re-attach these listeners on
+  // every single move.
+  const dragging = drag !== null;
+
+  useEffect(() => {
+    if (!dragging) return;
+
+    const move = (ev: PointerEvent) => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      // Pressing a pointer down emits a move with it, so a plain click would
+      // otherwise register as a drag and be swallowed. Nothing counts until the
+      // pointer has actually travelled.
+      const travelled = Math.hypot(ev.clientX - cur.startX, ev.clientY - cur.startY);
+      if (!cur.moved && travelled < DRAG_THRESHOLD_PX) return;
+
+      const at = pointerOnShelf(ev.clientX, ev.clientY);
+      if (!at) return;
+      const to = slotAt(at.x, at.y);
+      cur.to = to;
+      cur.moved = true;
+      // Hold the book on the bookcase so it can't be dragged off into space.
+      const pitch = slots.width + slots.gap;
+      const x = Math.max(
+        slots.firstX,
+        Math.min(slots.firstX + (Math.max(perRow, 1) - 1) * pitch, at.x)
+      );
+      const y = Math.max(
+        slots.restY,
+        Math.min((N_ROWS - 1) * shelfH + slots.restY, at.y)
+      );
+      setDrag((d) => (d ? { ...d, to, x, y } : d));
+    };
+
+    const finish = () => {
+      const cur = dragRef.current;
+      dragRef.current = null;
+      setDrag(null);
+      if (!cur) return;
+
+      // Selecting is settled here rather than in an onClick handler: taking the
+      // pointer down on a book has to stop propagation so the press starts a
+      // drag, and that stops react-three-fiber ever synthesising the click.
+      if (!cur.moved) {
+        setSelected((s) => (s === cur.from ? null : cur.from));
+        return;
+      }
+      if (cur.to !== cur.from) onMove?.(cur.from, cur.to);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+  }, [dragging, slots, perRow, shelfH, pointerOnShelf, slotAt, onMove]);
+
+  useEffect(() => {
+    const cursor = drag ? "grabbing" : hovered !== null ? (editable ? "grab" : "pointer") : "default";
+    document.body.style.cursor = cursor;
+    return () => { document.body.style.cursor = "default"; };
+  }, [hovered, drag, editable]);
+
+  // A shelf that shrinks under a selection shouldn't leave it pointing at a
+  // book that is no longer there.
+  const pick = editable && selected !== null && selected < placed.length ? selected : null;
+  const active = pick !== null ? placed[pick] : undefined;
+  const activeAt = active ? place(slotOf(active.data, pick!)) : null;
+
   return (
     <group>
-      {placed.map((p) => (
+      {placed.map((p, i) => (
         <group
-          key={p.id}
-          onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
-          onPointerOut={(e)  => { e.stopPropagation(); setHovered(false); }}
+          key={p.key}
+          onPointerOver={(e) => { e.stopPropagation(); setHovered(i); }}
+          onPointerOut={(e) => { e.stopPropagation(); setHovered((h) => (h === i ? null : h)); }}
+          onPointerDown={(e) => {
+            if (!editable || !onMove) return;
+            e.stopPropagation();
+            const at = pointerOnShelf(e.clientX, e.clientY);
+            if (!at) return;
+            dragRef.current = {
+              from: i,
+              to: i,
+              moved: false,
+              startX: e.clientX,
+              startY: e.clientY,
+            };
+            setDrag({ from: i, to: i, x: at.x, y: at.y });
+          }}
           onClick={(e) => {
             e.stopPropagation();
+            // While arranging, pointer-up above does the picking; a click here
+            // would only ever mean "open this book to read".
+            if (editable) return;
             router.push(`/book/${encodeURIComponent(p.data.id)}`);
           }}
         >
           <primitive object={p.wrapper} />
         </group>
       ))}
+
+      {editable && active && activeAt && !drag && (
+        <Html
+          position={[activeAt.x, activeAt.y + book.size.y * slots.scale, activeAt.z]}
+          center
+          distanceFactor={8}
+          zIndexRange={[20, 10]}
+        >
+          <div style={{ display: "flex", gap: 6, padding: "10px 4px" }}>
+            <button
+              title={`Duplicate ${active.data.title ?? "book"}`}
+              onClick={() => onDuplicate?.(pick!)}
+              style={shelfButton}
+            >
+              Duplicate
+            </button>
+            <button
+              title={`Remove ${active.data.title ?? "book"} from your shelf`}
+              onClick={() => { setSelected(null); onRemove?.(pick!); }}
+              style={{ ...shelfButton, color: "#ffd0c0" }}
+            >
+              Remove
+            </button>
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
+
+const shelfButton: React.CSSProperties = {
+  background: "rgba(28,18,8,0.92)",
+  border: "1px solid rgba(255,208,140,0.4)",
+  borderRadius: 999,
+  color: "#ffe8c0",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 11,
+  letterSpacing: 0.4,
+  padding: "5px 11px",
+  whiteSpace: "nowrap",
+};
 
 /* ---- Camera: fits full width, scrolls vertically ---- */
 
@@ -390,13 +663,22 @@ function LibraryRows({
   books,
   onBounds,
   onShelfH,
+  editable,
+  onMove,
+  onDuplicate,
+  onRemove,
 }: {
   books: BookData[];
   onBounds: (b: Bounds) => void;
   onShelfH: (h: number) => void;
+  editable?: boolean;
+  onMove?: (from: number, to: number) => void;
+  onDuplicate?: (index: number) => void;
+  onRemove?: (index: number) => void;
 }) {
   const [shelfBounds, setShelfBounds] = useState<Bounds | null>(null);
   const boundsSet = useRef(false);
+  const book = useBookMetrics();
 
   // One compartment per row, stacked flush, so the shelves stay contiguous.
   const shelfH = shelfBounds?.size.y ?? 0;
@@ -417,57 +699,54 @@ function LibraryRows({
   // In world-space, rows stack bottom→top, so we reverse to assign rows.
   const sectionsBottomToTop = useMemo(() => [...SHELF_CATEGORIES].reverse(), []);
 
-  // Distribute books proportionally to row count per section
-  const sectionSlices = useMemo(() => {
-    let offset = 0;
-    return sectionsBottomToTop.map((sec) => {
-      const count = Math.round(books.length * (sec.rows / N_ROWS));
-      const slice = books.slice(offset, offset + count);
-      offset += count;
-      return slice;
-    });
-  }, [books, sectionsBottomToTop]);
+  // Books are dealt out in the order the reader put them in: along the top shelf
+  // left to right, then down to the next, the way you fill a bookcase. Position
+  // 0 is therefore the first book you see. Rows are indexed bottom-up in world
+  // space, so the top shelf is the last one.
+  const perRow = shelfBounds ? rowCapacity(shelfBounds, book) : 0;
 
-  // Build flat row list with section metadata
-  const rows = useMemo(() => {
-    let rowIdx = 0;
-    return sectionsBottomToTop.flatMap((sec, si) => {
-      const secBooks = sectionSlices[si];
-      const perRow = Math.ceil(secBooks.length / Math.max(sec.rows, 1));
-      return Array.from({ length: sec.rows }, (_, ri) => {
-        const idx = rowIdx++;
-        return {
-          idx,
-          isBoundsRow: idx === 0,
-          books: secBooks.slice(ri * perRow, (ri + 1) * perRow),
-        };
-      });
-    });
-  }, [sectionsBottomToTop, sectionSlices]);
+  const rows = useMemo(
+    () => Array.from({ length: N_ROWS }, (_, idx) => ({ idx, isBoundsRow: idx === 0 })),
+    []
+  );
 
   // Row start index for each section (bottom-to-top order)
-  const sectionStarts = useMemo(() => {
-    let offset = 0;
-    return sectionsBottomToTop.map((sec) => {
-      const start = offset;
-      offset += sec.rows;
-      return start;
-    });
-  }, [sectionsBottomToTop]);
+  const sectionStarts = useMemo(
+    () =>
+      sectionsBottomToTop.map((_, i) =>
+        sectionsBottomToTop
+          .slice(0, i)
+          .reduce((rows, sec) => rows + sec.rows, 0)
+      ),
+    [sectionsBottomToTop]
+  );
 
   return (
     <>
-      {rows.map(({ idx, isBoundsRow, books: rowBooks }) => (
+      {rows.map(({ idx, isBoundsRow }) => (
         <group key={idx} position={[0, idx * shelfH, 0]} frustumCulled={true}>
           <ShelfMesh
             url="/models/shelfv2.glb"
             onBounds={isBoundsRow ? handleBounds : undefined}
           />
-          {shelfBounds && (
-            <ShelfBooks books={rowBooks} bounds={shelfBounds} />
-          )}
         </group>
       ))}
+
+      {/* Every book on the bookcase, placed by its position in the reading
+          order. Kept outside the row groups so a book can be dragged from one
+          shelf to another instead of being trapped in the row that owns it. */}
+      {shelfBounds && perRow > 0 && books.length > 0 && (
+        <ShelfBooks
+          books={books}
+          bounds={shelfBounds}
+          shelfH={shelfH}
+          perRow={perRow}
+          editable={editable}
+          onMove={onMove}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
+        />
+      )}
 
       {/* Category labels — centered on the first shelf of each section */}
       {shelfBounds && shelfH > 0 &&
@@ -524,11 +803,19 @@ function LibraryScene({
   cameraY,
   onMaxScrollY,
   onShelfH,
+  editable,
+  onMove,
+  onDuplicate,
+  onRemove,
 }: {
   books: BookData[];
   cameraY: number;
   onMaxScrollY: (v: number) => void;
   onShelfH: (h: number) => void;
+  editable?: boolean;
+  onMove?: (from: number, to: number) => void;
+  onDuplicate?: (index: number) => void;
+  onRemove?: (index: number) => void;
 }) {
   const [shelfBounds, setShelfBounds] = useState<Bounds | null>(null);
 
@@ -562,7 +849,15 @@ function LibraryScene({
 
       <Suspense fallback={<Loading />}>
         <Environment preset="apartment" background={false} />
-        <LibraryRows books={books} onBounds={handleBounds} onShelfH={onShelfH} />
+        <LibraryRows
+          books={books}
+          onBounds={handleBounds}
+          onShelfH={onShelfH}
+          editable={editable}
+          onMove={onMove}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
+        />
       </Suspense>
     </>
   );
@@ -617,15 +912,41 @@ function ScrollIndicator({
 
 /* ---- Canvas ---- */
 
-export default function ShelfScene({ books }: { books: BookData[] }) {
+export default function ShelfScene({
+  books,
+  editable = false,
+  onMove,
+  onDuplicate,
+  onRemove,
+}: {
+  books: BookData[];
+  /** Lets books be dragged along the shelf, duplicated and taken off. */
+  editable?: boolean;
+  onMove?: (from: number, to: number) => void;
+  onDuplicate?: (index: number) => void;
+  onRemove?: (index: number) => void;
+}) {
   const [maxScrollY, setMaxScrollY] = useState(0);
-  const [cameraY, setCameraY] = useState(999);
+  const [cameraY, setCameraY] = useState(0);
   const [shelfH, setShelfH] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const maxScrollYRef = useRef(0);
+  const openedAtTop = useRef(false);
 
+  // Open on the top shelf, where the reading order starts. The scroll extent
+  // isn't known until the shelf has been measured, so the first real value has
+  // to move the camera rather than just clamp it — clamping alone pinned the
+  // view to the bottom of the bookcase for good.
   useEffect(() => {
     maxScrollYRef.current = maxScrollY;
+    // The "have we opened yet" flag is flipped here rather than inside the
+    // updater: React calls updaters twice in development, and the second call
+    // would see the flag already set and clamp the view straight back down.
+    if (!openedAtTop.current && maxScrollY > 0) {
+      openedAtTop.current = true;
+      setCameraY(maxScrollY);
+      return;
+    }
     setCameraY((prev) => Math.min(prev, maxScrollY));
   }, [maxScrollY]);
 
@@ -687,6 +1008,10 @@ export default function ShelfScene({ books }: { books: BookData[] }) {
           cameraY={cameraY}
           onMaxScrollY={setMaxScrollY}
           onShelfH={setShelfH}
+          editable={editable}
+          onMove={onMove}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
         />
       </Canvas>
 
