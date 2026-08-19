@@ -132,11 +132,26 @@ export const JACKET_MATERIAL_PATTERN = /cover|jacket|wrap/i;
 /** Material that reads as paper, so it takes only a wash of the jacket colour. */
 const PAGE_MATERIAL_PATTERN = /page|paper|sheet/i;
 
-// How far each surface is pulled back toward white; 0 = the jacket colour itself.
-// The binding takes the jacket's colour outright; paper is lifted just enough to
-// still read as paper rather than as a slab of ink.
+/* ---- The colour of a book's insides ----
+ *
+ * Looking down on a shelved book you see two surfaces: the top of the page
+ * block, and a narrower strip of binding beside it — the inside of the book.
+ * The jacket has no upward-facing surface at all, so those two are the whole of
+ * what reads from above.
+ *
+ * Both take the median colour of the jacket by default, so a book's insides
+ * belong to its cover. To make every book's insides the same instead, set
+ * INSIDE_COLOR to a hex value; to change how far each surface is washed out
+ * toward white, change its mix — 0 is the jacket colour at full strength, 1 is
+ * plain white. */
+
+/** Flat colour for the inside strip, or null to follow each jacket. */
+export const INSIDE_COLOR: string | null = null;
+/** Flat colour for the page block, or null to follow each jacket. */
+export const PAGE_COLOR: string | null = null;
+
 const PAGE_TINT_MIX = 0.22;
-const BINDING_TINT_MIX = 0;
+const INSIDE_TINT_MIX = 0;
 
 const accentCache = new WeakMap<THREE.Texture, THREE.Color | null>();
 
@@ -198,10 +213,14 @@ export function coverAccentColor(tex: THREE.Texture): THREE.Color | null {
 
 function tintMaterial(source: THREE.Material, accent: THREE.Color): THREE.Material {
   const mat = source.clone() as THREE.MeshStandardMaterial;
-  const mix = PAGE_MATERIAL_PATTERN.test(mat.name ?? "")
-    ? PAGE_TINT_MIX
-    : BINDING_TINT_MIX;
-  mat.color?.copy(accent.clone().lerp(new THREE.Color(0xffffff), mix));
+  const isPaper = PAGE_MATERIAL_PATTERN.test(mat.name ?? "");
+  const flat = isPaper ? PAGE_COLOR : INSIDE_COLOR;
+  const mix = isPaper ? PAGE_TINT_MIX : INSIDE_TINT_MIX;
+  mat.color?.copy(
+    flat
+      ? new THREE.Color(flat)
+      : accent.clone().lerp(new THREE.Color(0xffffff), mix)
+  );
   mat.needsUpdate = true;
   return mat;
 }
