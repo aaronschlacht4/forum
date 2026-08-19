@@ -139,30 +139,37 @@ const PAGE_MATERIAL_PATTERN = /page|paper|sheet/i;
  * The jacket has no upward-facing surface at all, so those two are the whole of
  * what reads from above.
  *
- * Both take the median colour of the jacket by default, so a book's insides
- * belong to its cover. To make every book's insides the same instead, set
- * INSIDE_COLOR to a hex value; to change how far each surface is washed out
- * toward white, change its mix — 0 is the jacket colour at full strength, 1 is
- * plain white. */
+ * Both take the colour of the jacket's top edge, so the page block runs into
+ * the cover without a seam. Neither is lightened by default: washing them
+ * toward white is exactly what makes the join show. To make every book's
+ * insides the same instead, set INSIDE_COLOR or PAGE_COLOR to a hex value; to
+ * lift a surface back toward white, raise its mix — 0 is the jacket colour at
+ * full strength, 1 is plain white. */
 
 /** Flat colour for the inside strip, or null to follow each jacket. */
 export const INSIDE_COLOR: string | null = null;
 /** Flat colour for the page block, or null to follow each jacket. */
 export const PAGE_COLOR: string | null = null;
 
-const PAGE_TINT_MIX = 0.22;
+const PAGE_TINT_MIX = 0;
 const INSIDE_TINT_MIX = 0;
 
 const accentCache = new WeakMap<THREE.Texture, THREE.Color | null>();
 
+// The patch of jacket sampled for the insides: the middle of its top edge —
+// the top of the spine, which is the colour the page block runs into.
+const TOP_PATCH = { u0: 0.36, u1: 0.64, v0: 0, v1: 0.1 };
+
 /**
- * Median colour of the whole wraparound, used to colour the page block and
- * binding so a book's insides belong to its jacket.
+ * Colour of the jacket along its top edge, used for the page block and binding.
  *
- * Median rather than mean, taken per channel: an average is dragged around by
- * whatever is brightest or most extreme on the cover, while the median settles
- * on the colour the jacket actually is over most of its area — the cloth behind
- * the type, not the type.
+ * Taken from the top of the spine rather than averaged over the whole
+ * wraparound: what matters is the colour the insides meet, and the median of an
+ * entire jacket is some blend of front, spine and back that matches the top edge
+ * only by accident — which is why the seam showed.
+ *
+ * Median rather than mean, per channel, so title lettering across the patch
+ * doesn't drag the result; the median settles on the cloth behind the type.
  */
 export function coverAccentColor(tex: THREE.Texture): THREE.Color | null {
   if (accentCache.has(tex)) return accentCache.get(tex) ?? null;
@@ -179,8 +186,17 @@ export function coverAccentColor(tex: THREE.Texture): THREE.Color | null {
       canvas.width = canvas.height = N;
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (ctx) {
-        // The entire wraparound: back cover, spine and front.
-        ctx.drawImage(img, 0, 0, w, h, 0, 0, N, N);
+        ctx.drawImage(
+          img,
+          w * TOP_PATCH.u0,
+          h * TOP_PATCH.v0,
+          w * (TOP_PATCH.u1 - TOP_PATCH.u0),
+          h * (TOP_PATCH.v1 - TOP_PATCH.v0),
+          0,
+          0,
+          N,
+          N
+        );
         const px = ctx.getImageData(0, 0, N, N).data;
 
         const r: number[] = [], g: number[] = [], b: number[] = [];
@@ -216,11 +232,28 @@ function tintMaterial(source: THREE.Material, accent: THREE.Color): THREE.Materi
   const isPaper = PAGE_MATERIAL_PATTERN.test(mat.name ?? "");
   const flat = isPaper ? PAGE_COLOR : INSIDE_COLOR;
   const mix = isPaper ? PAGE_TINT_MIX : INSIDE_TINT_MIX;
-  mat.color?.copy(
-    flat
-      ? new THREE.Color(flat)
-      : accent.clone().lerp(new THREE.Color(0xffffff), mix)
-  );
+  const target = flat
+    ? new THREE.Color(flat)
+    : accent.clone().lerp(new THREE.Color(0xffffff), mix);
+
+  // A material renders as map × colour, so the artwork these ship with stains
+  // whatever tint is asked for. The two want opposite treatment.
+  if (isPaper) {
+    // Paper keeps its texture: that grain is the edges of the leaves, and the
+    // tint rides on top of it.
+    mat.color?.copy(target);
+  } else {
+    // The binding is the strip you see from above, beside the page block. Its
+    // baked map is a flat red swatch with nothing in it worth keeping, and it
+    // was staining every book red — covers with no red anywhere near them. Drop
+    // it so the strip is exactly the colour of the jacket's top edge.
+    mat.map = null;
+    mat.normalMap = null;
+    mat.roughnessMap = null;
+    mat.metalnessMap = null;
+    mat.color?.copy(target);
+  }
+
   mat.needsUpdate = true;
   return mat;
 }
