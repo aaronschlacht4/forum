@@ -69,8 +69,11 @@ const FRONT_INSET = 0.15;
 const SIDE_MARGIN = 0.04;
 // Gap between neighbouring books, as a fraction of one book's width.
 const BOOK_GAP = 0.08;
-// Guard against a pathological row trying to build thousands of clones.
-const MAX_BOOKS_PER_ROW = 24;
+// Guard against a pathological shelf trying to build thousands of clones. This
+// bounds how many books are *drawn*, not how many slots a shelf has — capping
+// the slots left the columns stopping short of the shelf's right-hand end, so
+// books could only be put down across part of the row.
+const MAX_BOOKS_DRAWN = 120;
 
 // Camera framing: fit the shelf width, with a little air around it.
 const CAMERA_FOV = 50;
@@ -150,14 +153,11 @@ function rowSlots(bounds: Bounds, book: BookMetrics, count: number) {
     return { scale, width, gap: 0, firstX: 0, restY, restZ, capacity: 0, n: 0 };
   }
 
-  // Only place what genuinely fits. The old layout squeezed every book in by
-  // shrinking them all, so one crowded row silently changed the size of its
-  // books; overflow now just stays off the shelf.
+  // As many slots as the shelf genuinely holds, right out to its end. The old
+  // layout instead squeezed every book in by shrinking them all, so one crowded
+  // row silently changed the size of its books.
   const gap = width * BOOK_GAP;
-  const capacity = Math.min(
-    MAX_BOOKS_PER_ROW,
-    Math.max(1, Math.floor((span + gap) / (width + gap)))
-  );
+  const capacity = Math.max(1, Math.floor((span + gap) / (width + gap)));
 
   // Stacked in from the left against a constant gap, the way books actually sit
   // on a shelf — a half-full row trails off into space rather than floating its
@@ -345,7 +345,7 @@ function ShelfBooks({
   );
 
   const capacity = Math.max(0, perRow * N_ROWS);
-  const shown = Math.min(books.length, capacity);
+  const shown = Math.min(books.length, capacity, MAX_BOOKS_DRAWN);
 
   const placed = useMemo(() => {
     if (shown === 0 || slots.width <= 1e-6) return [];

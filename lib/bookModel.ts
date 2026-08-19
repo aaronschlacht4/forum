@@ -151,8 +151,104 @@ export const INSIDE_COLOR: string | null = null;
 /** Flat colour for the page block, or null to follow each jacket. */
 export const PAGE_COLOR: string | null = null;
 
-const PAGE_TINT_MIX = 0;
+// Paper is lifted well toward white so a page block reads as paper carrying a
+// hint of the jacket, not as a slab of it. The binding strip takes the colour
+// at full strength, which is what closes the seam at the top edge.
+const PAGE_TINT_MIX = 0.62;
 const INSIDE_TINT_MIX = 0;
+
+/**
+ * Grain for the page block. Replace the file to change how paper reads.
+ *
+ * The model's own page texture is a photograph of page edges in deep shadow,
+ * averaging (83, 69, 55) — dark enough that tinting it could only ever darken it
+ * further, so a page block came out as a muddy brown slab. This is pale, which
+ * leaves room for the tint to sit on top of it.
+ */
+export const PAGE_TEXTURE_URL = "/textures/pages.jpg";
+
+/**
+ * The page block only samples a corner of its atlas — about 0.26 by 0.15 — so
+ * the grain is repeated to fill that patch rather than showing one magnified
+ * corner of the image.
+ */
+const PAGE_UV_PATCH = { u: 0.262, v: 0.152 };
+
+// Falls back to brightening the model's own texture if the file is missing.
+const PAGE_BRIGHTEN = 2.7;
+const PAGE_SATURATE = 0.35;
+
+let pageGrain: THREE.Texture | null = null;
+
+if (typeof window !== "undefined") {
+  new THREE.TextureLoader().load(
+    PAGE_TEXTURE_URL,
+    (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.flipY = false;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(1 / PAGE_UV_PATCH.u, 1 / PAGE_UV_PATCH.v);
+      t.needsUpdate = true;
+      pageGrain = t;
+    },
+    undefined,
+    () => {
+      console.warn(
+        `[bookModel] no page grain at ${PAGE_TEXTURE_URL}; brightening the model's own instead`
+      );
+    }
+  );
+}
+
+const litPageCache = new WeakMap<THREE.Texture, THREE.Texture | null>();
+
+/**
+ * A lightened copy of the page-block texture.
+ *
+ * Keeps the striations that make it read as stacked leaves, but raises them out
+ * of shadow so there is room for a tint on top instead of the photograph's own
+ * brown swallowing everything.
+ */
+function lightenedPageTexture(tex: THREE.Texture | null): THREE.Texture | null {
+  if (!tex) return null;
+  if (litPageCache.has(tex)) return litPageCache.get(tex) ?? null;
+
+  let lit: THREE.Texture | null = null;
+  const img = tex.image as CanvasImageSource;
+  const w = (img as { width?: number })?.width ?? 0;
+  const h = (img as { height?: number })?.height ?? 0;
+
+  if (w && h && typeof document !== "undefined") {
+    try {
+      // The page block is a sliver on screen; the source is 4096 across.
+      const scale = Math.min(1, 1024 / w);
+      const cw = Math.max(1, Math.round(w * scale));
+      const ch = Math.max(1, Math.round(h * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.filter = `brightness(${PAGE_BRIGHTEN}) saturate(${PAGE_SATURATE})`;
+        ctx.drawImage(img, 0, 0, w, h, 0, 0, cw, ch);
+        lit = new THREE.CanvasTexture(canvas);
+        // Match the original's conventions, or the grain lands upside down and
+        // in the wrong colour space.
+        lit.flipY = tex.flipY;
+        lit.wrapS = tex.wrapS;
+        lit.wrapT = tex.wrapT;
+        lit.colorSpace = THREE.SRGBColorSpace;
+        lit.anisotropy = tex.anisotropy;
+        lit.needsUpdate = true;
+      }
+    } catch {
+      lit = null;
+    }
+  }
+
+  litPageCache.set(tex, lit);
+  return lit;
+}
 
 const accentCache = new WeakMap<THREE.Texture, THREE.Color | null>();
 
@@ -239,8 +335,9 @@ function tintMaterial(source: THREE.Material, accent: THREE.Color): THREE.Materi
   // A material renders as map × colour, so the artwork these ship with stains
   // whatever tint is asked for. The two want opposite treatment.
   if (isPaper) {
-    // Paper keeps its texture: that grain is the edges of the leaves, and the
-    // tint rides on top of it.
+    // Paper keeps a grain — the edges of the leaves — with the tint on top.
+    const grain = pageGrain ?? lightenedPageTexture(mat.map);
+    if (grain) mat.map = grain;
     mat.color?.copy(target);
   } else {
     // The binding is the strip you see from above, beside the page block. Its
