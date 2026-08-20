@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Extracted book text — derived from the PDFs, rebuild with scripts/extract-books.mjs
+data/books/
