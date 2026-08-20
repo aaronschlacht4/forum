@@ -569,7 +569,7 @@ export default function BookReader({
                 aria-hidden
                 style={{
                   ...toggleKnob,
-                  transform: `translateX(${spread === 1 ? 0 : 22}px)`,
+                  transform: `translateX(${spread === 1 ? 0 : TOGGLE_HALF}px)`,
                 }}
               />
               <span style={{ ...toggleFace, color: spread === 1 ? "#241703" : "rgba(255,228,192,0.55)" }}>1</span>
@@ -908,6 +908,9 @@ const shell: React.CSSProperties = {
  * now, spaced evenly, with the book's name centred on the bar rather than
  * pushed off-centre by whatever sits either side of it.
  */
+const UI_FONT = 'ui-sans-serif, system-ui, "Segoe UI", -apple-system, sans-serif';
+const UI_SIZE = 12.5;
+
 const bar: React.CSSProperties = {
   position: "relative",
   display: "flex",
@@ -917,6 +920,10 @@ const bar: React.CSSProperties = {
   padding: "0 10px",
   background: "rgba(20,13,4,0.97)",
   borderBottom: "1px solid rgba(255,218,150,0.16)",
+  // Set once here so every control on the bar inherits it, rather than each
+  // repeating the family and being one restyle away from drifting apart.
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   zIndex: 3,
 };
 
@@ -937,8 +944,8 @@ const barItem: React.CSSProperties = {
   borderRadius: 7,
   color: "rgba(255,228,192,0.72)",
   cursor: "pointer",
-  fontFamily: "system-ui",
-  fontSize: 12.5,
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   textDecoration: "none",
   whiteSpace: "nowrap",
   transition: "background 140ms, color 140ms",
@@ -959,8 +966,8 @@ const titleBlock: React.CSSProperties = {
 
 const barTitle: React.CSSProperties = {
   color: "#ffe8c0",
-  fontFamily: "system-ui",
-  fontSize: 13.5,
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   fontWeight: 600,
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -969,21 +976,32 @@ const barTitle: React.CSSProperties = {
 
 const barSub: React.CSSProperties = {
   color: "rgba(255,220,160,0.5)",
-  fontFamily: "system-ui",
-  fontSize: 11.5,
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
 };
 
-/** One switch that flips between a single leaf and a spread. */
+/**
+ * One switch that flips between a single leaf and a spread.
+ *
+ * The numbers are laid out by the flexbox rather than by hand, and the knob is
+ * exactly half the track's inner width, so both halves land on whole pixels.
+ * Sized by hand it was a 22px knob travelling 22px inside a 50px track, which
+ * left each numeral a pixel off its own centre.
+ */
+const TOGGLE_HALF = 25;
+const TOGGLE_INSET = 2;
+
 const toggleTrack: React.CSSProperties = {
   position: "relative",
   display: "inline-flex",
-  alignItems: "center",
-  width: 52,
+  alignItems: "stretch",
+  boxSizing: "border-box",
+  width: TOGGLE_HALF * 2 + TOGGLE_INSET * 2 + 2, // halves + inset + border
   height: 26,
-  padding: 0,
+  padding: TOGGLE_INSET,
   border: "1px solid rgba(255,218,150,0.22)",
   borderRadius: 999,
   background: "rgba(255,228,192,0.05)",
@@ -992,10 +1010,10 @@ const toggleTrack: React.CSSProperties = {
 
 const toggleKnob: React.CSSProperties = {
   position: "absolute",
-  left: 2,
-  top: 2,
-  width: 22,
-  height: 20,
+  left: TOGGLE_INSET,
+  top: TOGGLE_INSET,
+  width: TOGGLE_HALF,
+  bottom: TOGGLE_INSET,
   borderRadius: 999,
   background: "rgba(255,200,120,0.9)",
   transition: "transform 160ms ease-out",
@@ -1003,11 +1021,14 @@ const toggleKnob: React.CSSProperties = {
 
 const toggleFace: React.CSSProperties = {
   position: "relative",
-  width: 24,
-  textAlign: "center",
-  fontFamily: "system-ui",
-  fontSize: 12,
+  flex: 1,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   fontWeight: 600,
+  lineHeight: 1,
   transition: "color 160ms",
 };
 
@@ -1152,15 +1173,15 @@ const stepButton: React.CSSProperties = {
   borderRadius: 7,
   color: "#ffe8c0",
   cursor: "pointer",
-  fontFamily: "system-ui",
-  fontSize: 12.5,
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   whiteSpace: "nowrap",
 };
 
 const counter: React.CSSProperties = {
   color: "rgba(255,220,160,0.6)",
-  fontFamily: "system-ui",
-  fontSize: 12,
+  fontFamily: UI_FONT,
+  fontSize: UI_SIZE,
   minWidth: 110,
   textAlign: "center",
 };
