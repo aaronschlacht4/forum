@@ -144,7 +144,7 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
 }
 /** Room taken by the bar, the progress line and the breathing space around a sheet. */
-const CHROME_HEIGHT = 156;
+const CHROME_HEIGHT = 162;
 const GUTTER = 26;
 
 /**
@@ -542,9 +542,9 @@ export default function BookReader({
         <a href="/library" className="rdr-item" style={barItem} title="Back to the library">
           <svg
             aria-hidden
-            width="13"
+            width="18"
             height="13"
-            viewBox="0 0 24 24"
+            viewBox="0 0 33 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2.6"
@@ -552,7 +552,7 @@ export default function BookReader({
             strokeLinejoin="round"
             style={{ opacity: 0.75 }}
           >
-            <path d="M19 12H5" />
+            <path d="M31 12H5" />
             <path d="m12 19-7-7 7-7" />
           </svg>
           Library
@@ -924,15 +924,15 @@ const shell: React.CSSProperties = {
  * pushed off-centre by whatever sits either side of it.
  */
 const UI_FONT = 'ui-sans-serif, system-ui, "Segoe UI", -apple-system, sans-serif';
-const UI_SIZE = 12.5;
+const UI_SIZE = 14;
 
 const bar: React.CSSProperties = {
   position: "relative",
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  height: 52,
-  padding: "0 10px",
+  height: 56,
+  padding: "0 12px",
   background: "rgba(20,13,4,0.97)",
   borderBottom: "1px solid rgba(255,218,150,0.16)",
   // Set once here so every control on the bar inherits it, rather than each
@@ -951,9 +951,9 @@ const barRight: React.CSSProperties = {
 const barItem: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 6,
-  height: 30,
-  padding: "0 12px",
+  gap: 7,
+  height: 32,
+  padding: "0 13px",
   background: "none",
   border: "none",
   borderRadius: 7,
@@ -982,7 +982,7 @@ const titleBlock: React.CSSProperties = {
 const barTitle: React.CSSProperties = {
   color: "#ffe8c0",
   fontFamily: UI_FONT,
-  fontSize: 16,
+  fontSize: 18,
   fontWeight: 600,
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -992,7 +992,7 @@ const barTitle: React.CSSProperties = {
 const barSub: React.CSSProperties = {
   color: "rgba(255,220,160,0.55)",
   fontFamily: UI_FONT,
-  fontSize: 13.5,
+  fontSize: 15,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -1006,7 +1006,7 @@ const barSub: React.CSSProperties = {
  * Sized by hand it was a 22px knob travelling 22px inside a 50px track, which
  * left each numeral a pixel off its own centre.
  */
-const TOGGLE_HALF = 25;
+const TOGGLE_HALF = 27;
 const TOGGLE_INSET = 2;
 
 const toggleTrack: React.CSSProperties = {
@@ -1015,7 +1015,7 @@ const toggleTrack: React.CSSProperties = {
   alignItems: "stretch",
   boxSizing: "border-box",
   width: TOGGLE_HALF * 2 + TOGGLE_INSET * 2 + 2, // halves + inset + border
-  height: 26,
+  height: 28,
   padding: TOGGLE_INSET,
   border: "1px solid rgba(255,218,150,0.22)",
   borderRadius: 999,
@@ -1181,8 +1181,8 @@ const definition: React.CSSProperties = {
 const stepButton: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  height: 30,
-  padding: "0 14px",
+  height: 32,
+  padding: "0 16px",
   background: "rgba(255,228,192,0.05)",
   border: "1px solid rgba(255,218,150,0.2)",
   borderRadius: 7,
