@@ -570,13 +570,16 @@ export default function BookReader({
       `}</style>
 
       <header style={bar}>
-        <a href="/library" style={{ ...pill, textDecoration: "none" }}>← Library</a>
+        <a href="/library" style={backLink} title="Back to the library">
+          <span aria-hidden>←</span> Library
+        </a>
 
         <div style={{ textAlign: "center", minWidth: 0 }}>
           <div style={barTitle}>{title}</div>
           <div style={barSub}>
-            {currentChapter ?? author ?? ""}
-            {currentChapter && author ? ` · ${author}` : ""}
+            {[surname(author), meaningfulChapter(currentChapter, title)]
+              .filter(Boolean)
+              .join(" · ")}
           </div>
         </div>
 
@@ -884,6 +887,25 @@ function TurnZone({
   );
 }
 
+/** "Mary Shelley" → "Shelley". A shelf goes by surnames. */
+function surname(author?: string | null) {
+  const parts = (author ?? "").trim().split(/\s+/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+
+/**
+ * Headings pulled out of a PDF are often just the book's own title shouted on
+ * the half-title page, which tells the reader nothing they can't already see.
+ */
+function meaningfulChapter(chapter: string | null, title: string) {
+  if (!chapter) return "";
+  const plain = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const c = plain(chapter);
+  const t = plain(title);
+  if (!c || c === t || t.includes(c) || c.includes(t)) return "";
+  return chapter;
+}
+
 function Centered({ children }: { children: React.ReactNode }) {
   return (
     <main style={{ ...shell, alignItems: "center", justifyContent: "center" }}>
@@ -936,6 +958,24 @@ const barSub: React.CSSProperties = {
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
+};
+
+/** Sized to its words, not to the column it sits in. */
+const backLink: React.CSSProperties = {
+  justifySelf: "start",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  background: "none",
+  border: "1px solid rgba(255,218,150,0.28)",
+  borderRadius: 999,
+  color: "#ffe8c0",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 12,
+  padding: "6px 13px",
+  textDecoration: "none",
+  whiteSpace: "nowrap",
 };
 
 const pill: React.CSSProperties = {

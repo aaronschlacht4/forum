@@ -84,15 +84,32 @@ export default function CommentsPanel({
               rows={4}
               style={input}
             />
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-              <select
-                value={visibility}
-                onChange={(e) => setVisibility(e.target.value as "public" | "private")}
-                style={select}
-              >
-                <option value="public">Everyone</option>
-                <option value="private">Only me</option>
-              </select>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={segmented} role="group" aria-label="Who can see this">
+                {(["public", "private"] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setVisibility(v)}
+                    style={{
+                      ...segment,
+                      background:
+                        visibility === v ? "rgba(255,200,120,0.22)" : "transparent",
+                      color:
+                        visibility === v ? "#ffe8c0" : "rgba(255,228,192,0.6)",
+                    }}
+                  >
+                    {v === "public" ? "Everyone" : "Only me"}
+                  </button>
+                ))}
+              </div>
               <div style={{ flex: 1 }} />
               <button onClick={onDraftCancel} style={ghostButton}>Cancel</button>
               <button onClick={submit} disabled={!body.trim()} style={primaryButton}>
@@ -271,14 +288,28 @@ const input: React.CSSProperties = {
   outline: "none",
 };
 
-const select: React.CSSProperties = {
-  background: "rgba(10,6,2,0.6)",
+/**
+ * A pair of buttons rather than a `select`. A native dropdown draws its own
+ * system chrome — the arrow, the popup, the focus ring — none of which takes
+ * the panel's colours, so it stood out as the one control from somewhere else.
+ */
+const segmented: React.CSSProperties = {
+  display: "flex",
+  // Sits in a row with the Cancel and Comment buttons, which would otherwise
+  // squeeze it until its second label was cut in half.
+  flexShrink: 0,
   border: "1px solid rgba(255,218,150,0.24)",
-  borderRadius: 5,
-  color: "rgba(255,228,192,0.8)",
+  borderRadius: 999,
+  overflow: "hidden",
+};
+
+const segment: React.CSSProperties = {
+  border: "none",
+  cursor: "pointer",
   fontFamily: "inherit",
   fontSize: 11.5,
-  padding: "5px 7px",
+  padding: "5px 11px",
+  whiteSpace: "nowrap",
 };
 
 const primaryButton: React.CSSProperties = {
