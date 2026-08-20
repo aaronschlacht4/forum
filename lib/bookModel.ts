@@ -188,6 +188,10 @@ if (typeof window !== "undefined") {
       t.flipY = false;
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(1 / PAGE_UV_PATCH.u, 1 / PAGE_UV_PATCH.v);
+      // Page edges are almost always seen at a sharp angle.
+      t.anisotropy = 16;
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
       t.needsUpdate = true;
       pageGrain = t;
     },

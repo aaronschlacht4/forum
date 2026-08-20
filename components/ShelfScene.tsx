@@ -181,6 +181,12 @@ export function rowCapacity(bounds: Bounds, book: BookMetrics) {
   return rowSlots(bounds, book, 0).capacity;
 }
 
+/**
+ * Anisotropy asked of every texture. 16 is the ceiling on essentially all
+ * current hardware and is clamped down to whatever the card allows.
+ */
+const MAX_ANISOTROPY = 16;
+
 /* ---- Shelf mesh ---- */
 
 function ShelfMesh({
@@ -201,10 +207,18 @@ function ShelfMesh({
       o.frustumCulled = false;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       mats.forEach((m: any) => {
-        if (m) {
-          m.side = THREE.DoubleSide;
-          m.needsUpdate = true;
+        if (!m) return;
+        m.side = THREE.DoubleSide;
+        // Wood grain runs away from the eye at a sharp angle; without this it
+        // turns to mush along the shelf.
+        for (const key of ["map", "normalMap", "roughnessMap"]) {
+          const tex = m[key];
+          if (tex) {
+            tex.anisotropy = MAX_ANISOTROPY;
+            tex.needsUpdate = true;
+          }
         }
+        m.needsUpdate = true;
       });
     });
 
@@ -992,7 +1006,12 @@ export default function ShelfScene({
     <div ref={containerRef} style={{ position: "absolute", inset: 0 }}>
       <Canvas
         shadows
-        dpr={[1, 1.5]}
+        // Capped at 1.5 the scene was drawn below the screen's resolution and
+        // upscaled — on a 2x display only 56% of its pixels were real, which is
+        // what made the spines look pixelated while the same model renders
+        // clean in Blender. The scene only redraws on demand, so the extra
+        // pixels cost little.
+        dpr={[1, 2]}
         style={{ position: "absolute", inset: 0 }}
         gl={{
           antialias: true,
