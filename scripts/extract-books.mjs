@@ -117,7 +117,7 @@ function toLines(content) {
     // Round the baseline so glyphs a hair apart still count as one line.
     const key = Math.round(y * 2) / 2;
     if (!rows.has(key)) rows.set(key, { y: key, height: Math.abs(height), runs: [] });
-    rows.get(key).runs.push({ x, str: item.str });
+    rows.get(key).runs.push({ x, str: item.str, width: item.width ?? 0 });
   }
 
   return [...rows.values()]
@@ -128,10 +128,41 @@ function toLines(content) {
         y: row.y,
         height: row.height,
         left: Math.min(...row.runs.map((r) => r.x)),
-        text: row.runs.map((r) => r.str).join("").replace(/\s+/g, " ").trim(),
+        text: joinRuns(row.runs, row.height).replace(/\s+/g, " ").trim(),
       };
     })
     .filter((line) => line.text.length > 0);
+}
+
+/**
+ * Joins the runs on a line, putting back the spaces the file never stored.
+ *
+ * A PDF positions glyphs; it does not have to write a space character between
+ * words, and frequently doesn't — the gap *is* the space. Concatenating the runs
+ * therefore welds the last word of one to the first word of the next. Where two
+ * runs are further apart than a space would be, one is written back in.
+ *
+ * The threshold is a fraction of the line's own type size, so it holds whether
+ * the page is set in 9pt or 24pt.
+ */
+function joinRuns(runs, fontSize) {
+  const gapForSpace = Math.max(0.6, (fontSize || 10) * SPACE_GAP_RATIO);
+  let text = "";
+  let cursor = null; // right-hand edge of the run just written
+
+  for (const run of runs) {
+    if (
+      cursor !== null &&
+      run.x - cursor > gapForSpace &&
+      !/\s$/.test(text) &&
+      !/^\s/.test(run.str)
+    ) {
+      text += " ";
+    }
+    text += run.str;
+    cursor = run.x + run.width;
+  }
+  return text;
 }
 
 /* ---- Running headers, footers and page numbers ---- */
@@ -177,6 +208,13 @@ const ENDS_SENTENCE = /[.!?…]["'”’)]?$/;
  * of paragraphs that end mid-sentence — the tell-tale of a paragraph cut in two.
  * Overridable by env var so they can be swept again on a new set of PDFs.
  */
+/**
+ * How far apart two runs must sit before the gap counts as a space, as a
+ * fraction of the type size. A space is roughly a quarter of an em in most
+ * faces; going lower starts inserting spaces into kerned pairs within a word.
+ */
+const SPACE_GAP_RATIO = Number(process.env.SPACE_GAP ?? 0.19);
+
 const BREAK = {
   // A gap this much wider than the usual line pitch starts a paragraph. The
   // first cut of this was 1.6, which fired on a third of all line transitions.
