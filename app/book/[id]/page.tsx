@@ -1,4 +1,4 @@
-import PDFViewerClient from "@/components/PDFViewerClient";
+import BookReadingView from "@/components/BookReadingView";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { notFound } from "next/navigation";
 
@@ -21,17 +21,14 @@ export default async function BookPage({
     notFound();
   }
 
-  // Just pass the filename from the database - PDFViewerClient will resolve the full URL
-  if (!book.pdf_path) {
-    return (
-      <main className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">{book.title}</h1>
-          <p className="text-gray-600">PDF not available for this book.</p>
-        </div>
-      </main>
-    );
-  }
-
-  return <PDFViewerClient pdfUrl={book.pdf_path} bookId={book.id.toString()} title={book.title} author={book.author} />;
+  // The reader fetches the extracted text itself; the stored filename is only
+  // needed for the PDF, which is now the fallback rather than the main view.
+  return (
+    <BookReadingView
+      bookId={book.id.toString()}
+      pdfPath={book.pdf_path ?? null}
+      title={book.title}
+      author={book.author}
+    />
+  );
 }
