@@ -120,9 +120,13 @@ function makeCoverMaterial(
   mat.roughness = 0.62;
   mat.metalness = 0.0;
 
+  // The jacket and the binding trim are all but coincident on the spine — the
+  // model has them within hundredths of a unit. Rather than leave the depth
+  // buffer to arbitrate, the jacket is biased toward the eye and the trim away
+  // from it, so which one shows is decided rather than discovered per triangle.
   mat.polygonOffset = true;
-  mat.polygonOffsetFactor = -1;
-  mat.polygonOffsetUnits = -4;
+  mat.polygonOffsetFactor = -2;
+  mat.polygonOffsetUnits = -8;
   mat.needsUpdate = true;
   return mat;
 }
@@ -353,6 +357,10 @@ function tintMaterial(source: THREE.Material, accent: THREE.Color): THREE.Materi
     mat.roughnessMap = null;
     mat.metalnessMap = null;
     mat.color?.copy(target);
+    // The other half of the bargain struck in makeCoverMaterial.
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = 2;
+    mat.polygonOffsetUnits = 8;
   }
 
   mat.needsUpdate = true;

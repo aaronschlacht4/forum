@@ -657,8 +657,14 @@ function LibraryCamera({
     const x = shelfBounds.center.x;
 
     cam.fov = CAMERA_FOV;
-    cam.near = 0.1;
-    cam.far = 400;
+    // The depth buffer's precision is spent across near..far, and it was set to
+    // 0.1..400 — a 4000:1 range for a shelf that occupies a few units around the
+    // camera. That left too little resolution to separate the jacket from the
+    // binding trim a few hundredths of a unit behind it, so the two fought and
+    // the fight showed up along the triangle edges. Bracketing the scene tightly
+    // gives that range back.
+    cam.near = Math.max(0.5, dist * 0.5);
+    cam.far = dist + N_ROWS * shelfBounds.size.y + 20;
     cam.updateProjectionMatrix();
     cam.position.set(x, y, shelfBounds.center.z + dist);
     cam.lookAt(x, y, shelfBounds.center.z);
