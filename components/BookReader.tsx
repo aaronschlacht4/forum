@@ -550,7 +550,12 @@ export default function BookReader({
             strokeWidth="2.6"
             strokeLinecap="round"
             strokeLinejoin="round"
-            style={{ opacity: 0.75 }}
+            // Centring the arrow on the label's layout box puts it above the
+            // word: that box runs ascender to descender, while the ink of
+            // "Library" sits 10.4px above the baseline and only 2.6px below.
+            // This drops it onto the word's optical centre, in em so it holds
+            // if the bar's type size changes again.
+            style={{ opacity: 0.75, position: "relative", top: "0.113em" }}
           >
             <path d="M31 12H5" />
             <path d="m12 19-7-7 7-7" />
