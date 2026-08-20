@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SelectionToolbar from "./SelectionToolbar";
 import AIChatPanel from "./AIChatPanel";
-import CommentModal from "./CommentModal";
+import CommentsPanel from "./CommentsPanel";
 import AnnotationPopover from "./AnnotationPopover";
 import { useAuth } from "@/lib/AuthContext";
 import {
@@ -231,9 +231,11 @@ export default function BookReader({
   const [selection, setSelection] = useState<
     { text: string; page: number; x: number; y: number } | null
   >(null);
-  const [commentOpen, setCommentOpen] = useState(false);
-  const [commentText, setCommentText] = useState("");
-  const [commentVisibility, setCommentVisibility] = useState<"public" | "private">("public");
+  // Clicking into a panel empties the browser's selection, which used to wipe
+  // the passage out from under the comment box and close it mid-sentence. The
+  // passage is frozen the moment a tool is chosen, and the tools read that copy.
+  const [pending, setPending] = useState<{ text: string; page: number } | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [chatFor, setChatFor] = useState<{ text: string; x: number; y: number } | null>(null);
   const [define, setDefine] = useState<
     { word: string; definition: string; partOfSpeech?: string; phonetic?: string; x: number; y: number } | null
@@ -249,7 +251,10 @@ export default function BookReader({
   // Reading a selection on mouse-up keeps the toolbar from flickering while the
   // pointer is still dragging across the words.
   useEffect(() => {
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      // A click inside one of our panels is not the reader choosing a new
+      // passage, and must not clear the one they already chose.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-ui-panel]")) return;
       const sel = window.getSelection();
       const text = sel?.toString().trim() ?? "";
       if (!text || !sel?.rangeCount) return setSelection(null);
@@ -293,26 +298,26 @@ export default function BookReader({
     [bookId, selection, clearSelection]
   );
 
+  /** Post the comment waiting in the panel against the frozen passage. */
   const addComment = useCallback(
-    async () => {
-      const comment = commentText.trim();
-      if (!selection || !comment) return;
-      const visibility = commentVisibility;
+    async (comment: string, visibility: "public" | "private") => {
+      if (!pending || !comment) return;
       const saved = await saveAnnotation(bookId, {
-        pageNumber: selection.page,
+        pageNumber: pending.page,
         type: "highlight",
-        data: { selectedText: selection.text, quote: selection.text, color: "#ffd97a" },
+        data: { selectedText: pending.text, quote: pending.text, color: "#ffd97a" },
         comment,
         color: "#ffd97a",
         visibility,
       });
-      if (saved) setAnnotations((all) => [...all, saved]);
-      else setNotice("Sign in to leave a comment.");
-      setCommentOpen(false);
-      setCommentText("");
-      clearSelection();
+      if (saved) {
+        setAnnotations((all) => [...all, saved]);
+        setPending(null);
+      } else {
+        setNotice("Sign in to leave a comment.");
+      }
     },
-    [bookId, selection, clearSelection, commentText, commentVisibility]
+    [bookId, pending]
   );
 
   const lookUp = useCallback(async () => {
@@ -353,6 +358,16 @@ export default function BookReader({
       } catch (e) {
         console.warn("[reader] replies unavailable:", e);
       }
+    },
+    []
+  );
+
+  const submitReplyTo = useCallback(
+    async (annotationId: string, body: string) => {
+      if (!body) return;
+      const saved = await saveReply(annotationId, body, false);
+      if (!saved) return setNotice("Sign in to reply.");
+      setReplies((all) => ({ ...all, [annotationId]: [...(all[annotationId] ?? []), saved] }));
     },
     []
   );
@@ -458,7 +473,9 @@ export default function BookReader({
     ? text.pageSize.width / text.pageSize.height
     : FALLBACK_ASPECT;
   const roomH = Math.max(320, viewport.h - CHROME_HEIGHT);
-  const roomW = Math.max(280, viewport.w - 120 - (columns - 1) * GUTTER) / columns;
+  const panelWidth = panelOpen && viewport.w >= 760 ? 340 : 0;
+  const roomW =
+    Math.max(280, viewport.w - panelWidth - 120 - (columns - 1) * GUTTER) / columns;
   const sheetH = Math.min(roomH, roomW / aspect);
   const sheetW = sheetH * aspect;
   // Type is sized so a sheet carries roughly what a page of the source carries.
@@ -533,6 +550,13 @@ export default function BookReader({
   const first = Math.max(1, Math.min(leaf, Math.max(1, sheets.length)));
   const visible = sheets.slice(first - 1, first - 1 + columns);
   const progress = Math.round(((first + columns - 1) / total) * 100);
+  // Only the threads attached to what is on screen, so the panel follows the
+  // reading rather than listing the whole book.
+  const shownPages = new Set(visible.flatMap((v) => [v.from, v.to]));
+  const pageComments = annotations.filter(
+    (a) => a.comment && shownPages.has(a.pageNumber)
+  );
+
   const atStart = first <= 1;
   const atEnd = first + columns > total;
 
@@ -578,6 +602,7 @@ export default function BookReader({
           {text.chapters.length > 0 && (
             <button onClick={() => setShowContents((v) => !v)} style={pill}>Contents</button>
           )}
+          <button onClick={() => setPanelOpen((v) => !v)} style={pill}>Comments</button>
           {onOpenPdf && <button onClick={onOpenPdf} style={pill}>PDF</button>}
         </div>
       </header>
@@ -611,6 +636,7 @@ export default function BookReader({
         </nav>
       )}
 
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div ref={deskRef} style={desk}>
         {/* Clicking the outer thirds turns the page, so the book can be read
             without going hunting for a control. A click that finished a text
@@ -647,6 +673,29 @@ export default function BookReader({
         </div>
       </div>
 
+      {panelWidth > 0 && (
+        <CommentsPanel
+          width={panelWidth}
+          draft={pending}
+          comments={pageComments}
+          replies={replies}
+          currentUserId={user?.id}
+          onDraftCancel={() => setPending(null)}
+          onDraftSubmit={addComment}
+          onReply={(id, body) => {
+            setReplyText(body);
+            void submitReplyTo(id, body);
+          }}
+          onDeleteComment={removeAnnotation}
+          onClose={() => { setPanelOpen(false); setPending(null); }}
+          onFocusComment={(a) => {
+            const i = sheets.findIndex((sh) => sh.to >= a.pageNumber);
+            if (i !== -1) goTo(i + 1, i + 1 >= first ? "next" : "back");
+          }}
+        />
+      )}
+      </div>
+
       <footer style={footer}>
         <button onClick={back} disabled={atStart} style={{ ...pill, opacity: atStart ? 0.35 : 1 }}>
           ‹ Back
@@ -658,30 +707,21 @@ export default function BookReader({
           Next ›
         </button>
       </footer>
-      {selection && !commentOpen && !chatFor && (
+      {selection && !chatFor && (
         <SelectionToolbar
           position={{ x: selection.x, y: selection.y }}
           onHighlight={addHighlight}
-          onComment={() => setCommentOpen(true)}
+          onComment={() => {
+            setPending({ text: selection.text, page: selection.page });
+            setPanelOpen(true);
+            clearSelection();
+          }}
           onDefine={lookUp}
           onAIChat={() => {
             setChatFor({ text: selection.text, x: selection.x, y: selection.y });
             setSelection(null);
           }}
           onDismiss={clearSelection}
-        />
-      )}
-
-      {commentOpen && selection && (
-        <CommentModal
-          show
-          selectedText={selection.text}
-          commentText={commentText}
-          visibility={commentVisibility}
-          onCommentTextChange={setCommentText}
-          onVisibilityChange={setCommentVisibility}
-          onSave={addComment}
-          onClose={() => { setCommentOpen(false); setCommentText(""); clearSelection(); }}
         />
       )}
 
