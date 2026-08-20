@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SelectionToolbar from "./SelectionToolbar";
 import AIChatPanel from "./AIChatPanel";
 import CommentsPanel from "./CommentsPanel";
-import AnnotationPopover from "./AnnotationPopover";
 import { useAuth } from "@/lib/AuthContext";
 import {
   Annotation,
@@ -153,9 +152,9 @@ const GUTTER = 26;
  *
  * The PDF viewer drew each page to a canvas, so the words were an image: they
  * didn't reflow, didn't scale with the reader's own type size, and couldn't be
- * selected or searched. This sets the extracted text as real type, but keeps the
- * page as the unit you move through — one leaf or a two-page spread, turned by
- * clicking or with the arrow keys.
+ * selected or searched. It has been removed; this is the reader now. Text is set
+ * as real type, with the page kept as the unit you move through — one leaf or a
+ * two-page spread, turned by clicking or with the arrow keys.
  *
  * Page numbers are real, not decoration. They are how annotations are anchored
  * and how a passage is found again.
@@ -164,12 +163,10 @@ export default function BookReader({
   bookId,
   title,
   author,
-  onOpenPdf,
 }: {
   bookId: string;
   title: string;
   author?: string | null;
-  onOpenPdf?: () => void;
 }) {
   const [text, setText] = useState<BookText | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -220,9 +217,7 @@ export default function BookReader({
 
   // A comment is only worth making if it can be read again, so the thread and
   // its replies are opened from the marked passage itself.
-  const [openNote, setOpenNote] = useState<
-    { annotation: Annotation; x: number; y: number } | null
-  >(null);
+  const [focused, setFocused] = useState<string | null>(null);
   const [replies, setReplies] = useState<{ [annotationId: string]: Reply[] }>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -300,12 +295,19 @@ export default function BookReader({
 
   /** Post the comment waiting in the panel against the frozen passage. */
   const addComment = useCallback(
-    async (comment: string, visibility: "public" | "private") => {
+    async (comment: string, visibility: "public" | "private", anonymous: boolean) => {
       if (!pending || !comment) return;
       const saved = await saveAnnotation(bookId, {
         pageNumber: pending.page,
         type: "highlight",
-        data: { selectedText: pending.text, quote: pending.text, color: "#ffd97a" },
+        // `annotations` has no anonymous column, while `replies` does, so this
+        // travels in the JSON rather than waiting on a migration.
+        data: {
+          selectedText: pending.text,
+          quote: pending.text,
+          color: "#ffd97a",
+          anonymous,
+        },
         comment,
         color: "#ffd97a",
         visibility,
@@ -346,8 +348,9 @@ export default function BookReader({
   }, [selection, clearSelection]);
 
   const openNoteAt = useCallback(
-    async (annotation: Annotation, x: number, y: number) => {
-      setOpenNote({ annotation, x, y });
+    async (annotation: Annotation) => {
+      setPanelOpen(true);
+      setFocused(annotation.id);
       try {
         const list = await loadReplies(annotation.id);
         const votes = await getVotesForReplies(list.map((r) => r.id));
@@ -363,9 +366,9 @@ export default function BookReader({
   );
 
   const submitReplyTo = useCallback(
-    async (annotationId: string, body: string) => {
+    async (annotationId: string, body: string, anonymous: boolean) => {
       if (!body) return;
-      const saved = await saveReply(annotationId, body, false);
+      const saved = await saveReply(annotationId, body, anonymous);
       if (!saved) return setNotice("Sign in to reply.");
       setReplies((all) => ({ ...all, [annotationId]: [...(all[annotationId] ?? []), saved] }));
     },
@@ -388,7 +391,7 @@ export default function BookReader({
   const removeAnnotation = useCallback(async (annotationId: string) => {
     if (!(await deleteAnnotation(annotationId))) return setNotice("Couldn't delete that.");
     setAnnotations((all) => all.filter((a) => a.id !== annotationId));
-    setOpenNote(null);
+    setFocused((cur) => (cur === annotationId ? null : cur));
   }, []);
 
   const removeReply = useCallback(async (replyId: string, annotationId: string) => {
@@ -448,6 +451,12 @@ export default function BookReader({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Someone typing a comment is not asking to turn the page.
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.("[data-ui-panel]") || /^(INPUT|TEXTAREA)$/.test(el?.tagName ?? "")) {
+        if (e.key === "Escape") setShowContents(false);
+        return;
+      }
       if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); next(); }
       if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); back(); }
       if (e.key === "Escape") setShowContents(false);
@@ -474,8 +483,7 @@ export default function BookReader({
     : FALLBACK_ASPECT;
   const roomH = Math.max(320, viewport.h - CHROME_HEIGHT);
   const panelWidth = panelOpen && viewport.w >= 760 ? 340 : 0;
-  const roomW =
-    Math.max(280, viewport.w - panelWidth - 120 - (columns - 1) * GUTTER) / columns;
+  const roomW = Math.max(280, viewport.w - 120 - (columns - 1) * GUTTER) / columns;
   const sheetH = Math.min(roomH, roomW / aspect);
   const sheetW = sheetH * aspect;
   // Type is sized so a sheet carries roughly what a page of the source carries.
@@ -540,7 +548,6 @@ export default function BookReader({
             node scripts/extract-books.mjs --upload
           </code>
         )}
-        {onOpenPdf && <button onClick={onOpenPdf} style={pill}>Read the PDF instead</button>}
       </Centered>
     );
   }
@@ -606,7 +613,6 @@ export default function BookReader({
             <button onClick={() => setShowContents((v) => !v)} style={pill}>Contents</button>
           )}
           <button onClick={() => setPanelOpen((v) => !v)} style={pill}>Comments</button>
-          {onOpenPdf && <button onClick={onOpenPdf} style={pill}>PDF</button>}
         </div>
       </header>
 
@@ -639,15 +645,23 @@ export default function BookReader({
         </nav>
       )}
 
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      <div style={{ position: "relative", display: "flex", flex: 1, minHeight: 0 }}>
       <div ref={deskRef} style={desk}>
         {/* Clicking the outer thirds turns the page, so the book can be read
             without going hunting for a control. A click that finished a text
             selection is left alone. */}
-        <TurnZone side="left" disabled={atStart} onTurn={back} />
-        <TurnZone side="right" disabled={atEnd} onTurn={next} />
+        <TurnZone side="left" disabled={atStart || panelOpen} onTurn={back} />
+        <TurnZone side="right" disabled={atEnd || panelOpen} onTurn={next} />
 
-        <div style={{ display: "flex", gap: GUTTER, alignItems: "flex-start" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: GUTTER,
+            alignItems: "flex-start",
+            transform: `translateX(${-panelWidth / 2}px)`,
+            transition: "transform 220ms ease-out",
+          }}
+        >
           {visible.map((sh, i) => (
             <section
               key={`${turn.n}-${leaf}-${i}`}
@@ -679,18 +693,17 @@ export default function BookReader({
       {panelWidth > 0 && (
         <CommentsPanel
           width={panelWidth}
+          floating
           draft={pending}
           comments={pageComments}
           replies={replies}
           currentUserId={user?.id}
           onDraftCancel={() => setPending(null)}
           onDraftSubmit={addComment}
-          onReply={(id, body) => {
-            setReplyText(body);
-            void submitReplyTo(id, body);
-          }}
+          onReply={(id, body, anonymous) => void submitReplyTo(id, body, anonymous)}
           onDeleteComment={removeAnnotation}
           onClose={() => { setPanelOpen(false); setPending(null); }}
+          focusedId={focused}
           onFocusComment={(a) => {
             const i = sheets.findIndex((sh) => sh.to >= a.pageNumber);
             if (i !== -1) goTo(i + 1, i + 1 >= first ? "next" : "back");
@@ -733,35 +746,6 @@ export default function BookReader({
           selectedText={chatFor.text}
           position={{ x: chatFor.x, y: chatFor.y }}
           onClose={() => setChatFor(null)}
-        />
-      )}
-
-      {openNote && (
-        <AnnotationPopover
-          annotation={openNote.annotation}
-          position={{ x: openNote.x, y: openNote.y }}
-          replies={replies[openNote.annotation.id] ?? []}
-          expandedComments={expanded}
-          showReplyInput={replyingTo}
-          replyText={replyText}
-          replyAnonymous={replyAnonymous}
-          currentUserId={user?.id}
-          onClose={() => setOpenNote(null)}
-          onToggleExpanded={(id) =>
-            setExpanded((cur) => {
-              const next = new Set(cur);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            })
-          }
-          onReplyClick={(id) => setReplyingTo((cur) => (cur === id ? null : id))}
-          onDeleteAnnotation={removeAnnotation}
-          onDeleteReply={removeReply}
-          onReplyTextChange={setReplyText}
-          onReplyAnonymousChange={setReplyAnonymous}
-          onSubmitReply={submitReply}
-          onVote={vote}
         />
       )}
 
@@ -808,7 +792,7 @@ export default function BookReader({
 function withMarks(
   text: string,
   marks: [string, Annotation][],
-  onOpen: (a: Annotation, x: number, y: number) => void
+  onOpen: (a: Annotation) => void
 ): React.ReactNode {
   const hit = marks.find(([quote]) => text.includes(quote));
   if (!hit) return text;
@@ -823,8 +807,7 @@ function withMarks(
       <mark
         onClick={(e) => {
           e.stopPropagation();
-          const box = (e.target as HTMLElement).getBoundingClientRect();
-          onOpen(annotation, box.left + box.width / 2, box.top);
+          onOpen(annotation);
         }}
         style={{
           background: annotation.color || "#ffd97a",

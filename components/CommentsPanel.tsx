@@ -14,10 +14,12 @@ import { Reply } from "@/lib/replies";
  */
 export default function CommentsPanel({
   width,
+  floating = false,
   draft,
   comments,
   replies,
   currentUserId,
+  focusedId,
   onDraftCancel,
   onDraftSubmit,
   onReply,
@@ -26,22 +28,28 @@ export default function CommentsPanel({
   onFocusComment,
 }: {
   width: number;
+  /** Sits over the pages rather than in the layout, so they never resize. */
+  floating?: boolean;
   /** The passage waiting for a comment, if one has just been selected. */
   draft: { text: string; page: number } | null;
   comments: Annotation[];
   replies: { [annotationId: string]: Reply[] };
   currentUserId?: string;
+  /** The thread just opened from the text, so it can be picked out of the list. */
+  focusedId?: string | null;
   onDraftCancel: () => void;
-  onDraftSubmit: (body: string, visibility: "public" | "private") => void;
-  onReply: (annotationId: string, body: string) => void;
+  onDraftSubmit: (body: string, visibility: "public" | "private", anonymous: boolean) => void;
+  onReply: (annotationId: string, body: string, anonymous: boolean) => void;
   onDeleteComment: (annotationId: string) => void;
   onClose: () => void;
   onFocusComment: (annotation: Annotation) => void;
 }) {
   const [body, setBody] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
+  const [anonymous, setAnonymous] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState("");
+  const [replyAnonymous, setReplyAnonymous] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
 
   // A new draft should be ready to type into without reaching for the mouse.
@@ -49,15 +57,32 @@ export default function CommentsPanel({
     if (draft) composer.current?.focus();
   }, [draft]);
 
+  const sendReply = (annotationId: string) => {
+    const text = replyBody.trim();
+    if (!text) return;
+    onReply(annotationId, text, replyAnonymous);
+    setReplyBody("");
+    setReplyTo(null);
+  };
+
   const submit = () => {
     const text = body.trim();
     if (!text) return;
-    onDraftSubmit(text, visibility);
+    onDraftSubmit(text, visibility, anonymous);
     setBody("");
   };
 
   return (
-    <aside data-ui-panel style={{ ...panel, width }}>
+    <aside
+      data-ui-panel
+      style={{
+        ...panel,
+        width,
+        ...(floating
+          ? ({ position: "absolute", top: 0, right: 0, bottom: 0, zIndex: 6 } as const)
+          : null),
+      }}
+    >
       <header style={head}>
         <span style={{ letterSpacing: 0.3 }}>
           Comments
@@ -71,7 +96,7 @@ export default function CommentsPanel({
       <div style={body_}>
         {draft && (
           <section style={draftCard}>
-            <div style={quote}>{trim(draft.text, 220)}</div>
+            <blockquote style={quote}>“{trim(draft.text, 220)}”</blockquote>
             <textarea
               ref={composer}
               value={body}
@@ -93,23 +118,24 @@ export default function CommentsPanel({
                 flexWrap: "wrap",
               }}
             >
-              <div style={segmented} role="group" aria-label="Who can see this">
-                {(["public", "private"] as const).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setVisibility(v)}
-                    style={{
-                      ...segment,
-                      background:
-                        visibility === v ? "rgba(255,200,120,0.22)" : "transparent",
-                      color:
-                        visibility === v ? "#ffe8c0" : "rgba(255,228,192,0.6)",
-                    }}
-                  >
-                    {v === "public" ? "Everyone" : "Only me"}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                label="Who can see this"
+                options={[
+                  ["public", "Everyone"],
+                  ["private", "Only me"],
+                ]}
+                value={visibility}
+                onChange={(v) => setVisibility(v as "public" | "private")}
+              />
+              <Segmented
+                label="Whose name is on this"
+                options={[
+                  ["named", "As me"],
+                  ["anon", "Anonymous"],
+                ]}
+                value={anonymous ? "anon" : "named"}
+                onChange={(v) => setAnonymous(v === "anon")}
+              />
               <div style={{ flex: 1 }} />
               <button onClick={onDraftCancel} style={ghostButton}>Cancel</button>
               <button onClick={submit} disabled={!body.trim()} style={primaryButton}>
@@ -129,13 +155,28 @@ export default function CommentsPanel({
         {comments.map((c) => {
           const thread = replies[c.id] ?? [];
           return (
-            <article key={c.id} style={card}>
+            <article
+              key={c.id}
+              style={{
+                ...card,
+                ...(c.id === focusedId
+                  ? {
+                      borderColor: "rgba(255,200,120,0.5)",
+                      background: "rgba(255,200,120,0.09)",
+                    }
+                  : null),
+              }}
+            >
               <button onClick={() => onFocusComment(c)} style={quoteButton} title="Show in the text">
-                {trim((c.data as { quote?: string })?.quote ?? "", 160)}
+                “{trim((c.data as { quote?: string })?.quote ?? "", 160)}”
               </button>
 
               <div style={meta}>
-                <span style={{ color: "#ffe0b0" }}>{c.displayName || c.username || "Someone"}</span>
+                <Avatar
+                  name={commenter(c)}
+                  anonymous={Boolean((c.data as { anonymous?: boolean })?.anonymous)}
+                />
+                <span style={{ color: "#ffe0b0" }}>{commenter(c)}</span>
                 {c.visibility === "private" && <span style={badge}>only me</span>}
                 {c.userId && c.userId === currentUserId && (
                   <button onClick={() => onDeleteComment(c.id)} style={deleteButton} title="Delete">
@@ -146,50 +187,67 @@ export default function CommentsPanel({
 
               <p style={commentBody}>{c.comment}</p>
 
-              {thread.map((r) => (
-                <div key={r.id} style={replyRow}>
-                  <span style={{ color: "rgba(255,214,150,0.85)" }}>
-                    {r.isAnonymous ? "Anonymous" : r.displayName || r.username || "Someone"}
-                  </span>
-                  <span style={{ opacity: 0.85 }}>{r.content}</span>
-                </div>
-              ))}
+              {/* Replies sit indented under the comment they answer, on a rail,
+                  so a thread looks like a thread rather than a run of separate
+                  remarks stacked in a column. */}
+              {(thread.length > 0 || replyTo === c.id) && (
+                <div style={rail}>
+                  {thread.length > 0 && (
+                    <div style={threadCount}>
+                      {thread.length} {thread.length === 1 ? "reply" : "replies"}
+                    </div>
+                  )}
 
-              {replyTo === c.id ? (
-                <div style={{ marginTop: 8 }}>
-                  <textarea
-                    value={replyBody}
-                    onChange={(e) => setReplyBody(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                        onReply(c.id, replyBody.trim());
-                        setReplyBody("");
-                        setReplyTo(null);
-                      }
-                      if (e.key === "Escape") setReplyTo(null);
-                    }}
-                    placeholder="Reply…"
-                    rows={3}
-                    style={input}
-                  />
-                  <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "flex-end" }}>
-                    <button onClick={() => setReplyTo(null)} style={ghostButton}>Cancel</button>
-                    <button
-                      onClick={() => {
-                        if (!replyBody.trim()) return;
-                        onReply(c.id, replyBody.trim());
-                        setReplyBody("");
-                        setReplyTo(null);
-                      }}
-                      style={primaryButton}
-                    >
-                      Reply
-                    </button>
-                  </div>
+                  {thread.map((r) => {
+                    const who = r.isAnonymous
+                      ? "Anonymous"
+                      : r.displayName || r.username || "Someone";
+                    return (
+                      <div key={r.id} style={replyRow}>
+                        <Avatar name={who} anonymous={r.isAnonymous} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={replyWho}>{who}</div>
+                          <div style={replyText}>{r.content}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {replyTo === c.id && (
+                    <div style={{ marginTop: 9 }}>
+                      <textarea
+                        value={replyBody}
+                        onChange={(e) => setReplyBody(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendReply(c.id);
+                          if (e.key === "Escape") setReplyTo(null);
+                        }}
+                        placeholder="Reply…"
+                        rows={3}
+                        style={input}
+                      />
+                      <div style={replyActions}>
+                        <Segmented
+                          label="Whose name is on this reply"
+                          options={[
+                            ["named", "As me"],
+                            ["anon", "Anonymous"],
+                          ]}
+                          value={replyAnonymous ? "anon" : "named"}
+                          onChange={(v) => setReplyAnonymous(v === "anon")}
+                        />
+                        <div style={{ flex: 1 }} />
+                        <button onClick={() => setReplyTo(null)} style={ghostButton}>Cancel</button>
+                        <button onClick={() => sendReply(c.id)} style={primaryButton}>Reply</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ) : (
+              )}
+
+              {replyTo !== c.id && (
                 <button onClick={() => setReplyTo(c.id)} style={replyLink}>
-                  Reply{thread.length ? ` · ${thread.length}` : ""}
+                  {thread.length ? "Add a reply" : "Reply"}
                 </button>
               )}
             </article>
@@ -197,6 +255,56 @@ export default function CommentsPanel({
         })}
       </div>
     </aside>
+  );
+}
+
+function commenter(c: Annotation) {
+  if ((c.data as { anonymous?: boolean })?.anonymous) return "Anonymous";
+  return c.displayName || c.username || "Someone";
+}
+
+/** A small initial, so a thread can be scanned by who said what. */
+function Avatar({ name, anonymous }: { name: string; anonymous?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        ...avatar,
+        background: anonymous ? "rgba(255,228,192,0.12)" : "rgba(255,200,120,0.22)",
+      }}
+    >
+      {anonymous ? "?" : name.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
+function Segmented({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: [string, string][];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div style={segmented} role="group" aria-label={label}>
+      {options.map(([key, text]) => (
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          style={{
+            ...segment,
+            background: value === key ? "rgba(255,200,120,0.22)" : "transparent",
+            color: value === key ? "#ffe8c0" : "rgba(255,228,192,0.6)",
+          }}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -256,10 +364,13 @@ const quote: React.CSSProperties = {
   borderLeft: "2px solid rgba(255,190,90,0.55)",
   paddingLeft: 8,
   marginBottom: 9,
-  color: "rgba(255,225,175,0.75)",
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: 11.5,
-  lineHeight: 1.5,
+  margin: 0,
+  color: "rgba(255,225,175,0.78)",
+  // The passage is the book speaking, so it is set in the book's face.
+  fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
+  fontStyle: "italic",
+  fontSize: 12,
+  lineHeight: 1.55,
 };
 
 const quoteButton: React.CSSProperties = {
@@ -380,14 +491,61 @@ const commentBody: React.CSSProperties = {
   whiteSpace: "pre-wrap",
 };
 
+/** The rail is the thread: one line down the left, everything hanging off it. */
+const rail: React.CSSProperties = {
+  marginTop: 10,
+  marginLeft: 4,
+  paddingLeft: 11,
+  borderLeft: "2px solid rgba(255,200,120,0.28)",
+};
+
+const threadCount: React.CSSProperties = {
+  fontSize: 10.5,
+  letterSpacing: 0.5,
+  textTransform: "uppercase",
+  color: "rgba(255,220,160,0.45)",
+  marginBottom: 7,
+};
+
 const replyRow: React.CSSProperties = {
   display: "flex",
-  gap: 7,
-  marginTop: 7,
-  paddingTop: 7,
-  borderTop: "1px solid rgba(255,218,150,0.14)",
+  gap: 8,
+  alignItems: "flex-start",
+  marginBottom: 9,
+};
+
+const replyWho: React.CSSProperties = {
+  color: "rgba(255,214,150,0.85)",
+  fontSize: 11,
+  marginBottom: 2,
+};
+
+const replyText: React.CSSProperties = {
+  color: "rgba(255,236,206,0.9)",
   fontSize: 12,
-  lineHeight: 1.5,
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+};
+
+const replyActions: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  marginTop: 7,
+  flexWrap: "wrap",
+};
+
+const avatar: React.CSSProperties = {
+  flexShrink: 0,
+  width: 20,
+  height: 20,
+  borderRadius: "50%",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 10.5,
+  fontWeight: 600,
+  color: "#ffe8c0",
 };
 
 const replyLink: React.CSSProperties = {

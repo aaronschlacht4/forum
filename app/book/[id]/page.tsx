@@ -1,4 +1,4 @@
-import BookReadingView from "@/components/BookReadingView";
+import BookReader from "@/components/BookReader";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { notFound } from "next/navigation";
 
@@ -21,12 +21,10 @@ export default async function BookPage({
     notFound();
   }
 
-  // The reader fetches the extracted text itself; the stored filename is only
-  // needed for the PDF, which is now the fallback rather than the main view.
+  // The reader fetches the extracted text itself.
   return (
-    <BookReadingView
+    <BookReader
       bookId={book.id.toString()}
-      pdfPath={book.pdf_path ?? null}
       title={book.title}
       author={book.author}
     />

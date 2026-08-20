@@ -1,6 +1,4 @@
 import "./globals.css";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
 import { AuthProvider } from "@/lib/AuthContext";
 
 export const metadata = {
