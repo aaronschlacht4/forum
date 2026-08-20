@@ -144,7 +144,7 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
 }
 /** Room taken by the bar, the progress line and the breathing space around a sheet. */
-const CHROME_HEIGHT = 150;
+const CHROME_HEIGHT = 156;
 const GUTTER = 26;
 
 /**
@@ -540,7 +540,22 @@ export default function BookReader({
 
       <header style={bar}>
         <a href="/library" className="rdr-item" style={barItem} title="Back to the library">
-          <span aria-hidden style={{ opacity: 0.7 }}>←</span> Library
+          <svg
+            aria-hidden
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ opacity: 0.75 }}
+          >
+            <path d="M19 12H5" />
+            <path d="m12 19-7-7 7-7" />
+          </svg>
+          Library
         </a>
 
         {/* Centred on the bar itself, so it stays put however wide the controls
@@ -916,7 +931,7 @@ const bar: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  height: 46,
+  height: 52,
   padding: "0 10px",
   background: "rgba(20,13,4,0.97)",
   borderBottom: "1px solid rgba(255,218,150,0.16)",
@@ -967,7 +982,7 @@ const titleBlock: React.CSSProperties = {
 const barTitle: React.CSSProperties = {
   color: "#ffe8c0",
   fontFamily: UI_FONT,
-  fontSize: UI_SIZE,
+  fontSize: 16,
   fontWeight: 600,
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -975,9 +990,9 @@ const barTitle: React.CSSProperties = {
 };
 
 const barSub: React.CSSProperties = {
-  color: "rgba(255,220,160,0.5)",
+  color: "rgba(255,220,160,0.55)",
   fontFamily: UI_FONT,
-  fontSize: UI_SIZE,
+  fontSize: 13.5,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
