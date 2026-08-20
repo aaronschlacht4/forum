@@ -219,7 +219,6 @@ export default function BookReader({
   // its replies are opened from the marked passage itself.
   const [focused, setFocused] = useState<string | null>(null);
   const [replies, setReplies] = useState<{ [annotationId: string]: Reply[] }>({});
-  const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [selection, setSelection] = useState<
     { text: string; page: number; x: number; y: number } | null
   >(null);
@@ -544,8 +543,8 @@ export default function BookReader({
           <span aria-hidden style={{ opacity: 0.7 }}>←</span> Library
         </a>
 
-        <span style={divider} />
-
+        {/* Centred on the bar itself, so it stays put however wide the controls
+            either side of it happen to be. */}
         <div style={titleBlock}>
           <span style={barTitle}>{title}</span>
           {(() => {
@@ -556,47 +555,46 @@ export default function BookReader({
           })()}
         </div>
 
-        <span style={{ flex: 1 }} />
+        <div style={barRight}>
+          {viewport.w >= 900 && (
+            <button
+              role="switch"
+              aria-checked={spread === 2}
+              aria-label={spread === 1 ? "One page at a time" : "Two pages at a time"}
+              title={spread === 1 ? "One page" : "Two pages"}
+              onClick={() => setSpread(spread === 1 ? 2 : 1)}
+              style={toggleTrack}
+            >
+              <span
+                aria-hidden
+                style={{
+                  ...toggleKnob,
+                  transform: `translateX(${spread === 1 ? 0 : 22}px)`,
+                }}
+              />
+              <span style={{ ...toggleFace, color: spread === 1 ? "#241703" : "rgba(255,228,192,0.55)" }}>1</span>
+              <span style={{ ...toggleFace, color: spread === 2 ? "#241703" : "rgba(255,228,192,0.55)" }}>2</span>
+            </button>
+          )}
 
-        {viewport.w >= 900 && (
-          <>
-            <div style={segmented} role="group" aria-label="Pages at a time">
-              {([1, 2] as const).map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setSpread(n)}
-                  style={{
-                    ...segment,
-                    background: spread === n ? "rgba(255,200,120,0.2)" : "transparent",
-                    color: spread === n ? "#ffe8c0" : "rgba(255,228,192,0.55)",
-                  }}
-                >
-                  {n}
-                </button>
-              ))}
-              <span style={segmentLabel}>{spread === 1 ? "page" : "pages"}</span>
-            </div>
-            <span style={divider} />
-          </>
-        )}
+          {text.chapters.length > 0 && (
+            <button
+              className="rdr-item"
+              onClick={() => setShowContents((v) => !v)}
+              style={{ ...barItem, color: showContents ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
+            >
+              Contents
+            </button>
+          )}
 
-        {text.chapters.length > 0 && (
           <button
             className="rdr-item"
-            onClick={() => setShowContents((v) => !v)}
-            style={{ ...barItem, color: showContents ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
+            onClick={() => setPanelOpen((v) => !v)}
+            style={{ ...barItem, color: panelOpen ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
           >
-            Contents
+            Comments
           </button>
-        )}
-
-        <button
-          className="rdr-item"
-          onClick={() => setPanelOpen((v) => !v)}
-          style={{ ...barItem, color: panelOpen ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
-        >
-          Comments
-        </button>
+        </div>
       </header>
 
       <div style={progressTrack}>
@@ -696,13 +694,13 @@ export default function BookReader({
       </div>
 
       <footer style={footer}>
-        <button onClick={back} disabled={atStart} style={{ ...pill, opacity: atStart ? 0.35 : 1 }}>
+        <button onClick={back} disabled={atStart} style={{ ...stepButton, opacity: atStart ? 0.3 : 1 }}>
           ‹ Back
         </button>
         <span style={counter}>
           {columns === 2 && visible.length > 1 ? `${first}–${first + 1}` : first} of {total}
         </span>
-        <button onClick={next} disabled={atEnd} style={{ ...pill, opacity: atEnd ? 0.35 : 1 }}>
+        <button onClick={next} disabled={atEnd} style={{ ...stepButton, opacity: atEnd ? 0.3 : 1 }}>
           Next ›
         </button>
       </footer>
@@ -902,21 +900,38 @@ const shell: React.CSSProperties = {
  * separate buttons that happened to be near each other. They share a surface
  * now and are parted by hairlines, which is what makes it read as a single bar.
  */
+/**
+ * One rule across the top, with everything on it.
+ *
+ * Each control used to be its own outlined pill, so the bar read as a row of
+ * separate buttons that happened to be near each other. They share a surface
+ * now, spaced evenly, with the book's name centred on the bar rather than
+ * pushed off-centre by whatever sits either side of it.
+ */
 const bar: React.CSSProperties = {
+  position: "relative",
   display: "flex",
-  alignItems: "stretch",
+  alignItems: "center",
+  justifyContent: "space-between",
   height: 46,
-  padding: "0 6px 0 8px",
+  padding: "0 10px",
   background: "rgba(20,13,4,0.97)",
   borderBottom: "1px solid rgba(255,218,150,0.16)",
   zIndex: 3,
+};
+
+const barRight: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
 };
 
 const barItem: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  padding: "0 13px",
+  height: 30,
+  padding: "0 12px",
   background: "none",
   border: "none",
   borderRadius: 7,
@@ -929,24 +944,17 @@ const barItem: React.CSSProperties = {
   transition: "background 140ms, color 140ms",
 };
 
-const divider: React.CSSProperties = {
-  alignSelf: "center",
-  width: 1,
-  height: 20,
-  margin: "0 4px",
-  background: "rgba(255,218,150,0.16)",
-};
-
-/** Title and author read as one label, not two stacked lines of chrome. */
+/** Taken out of the flow so it centres on the bar, not on the space left over. */
 const titleBlock: React.CSSProperties = {
-  // Baseline-aligns the title against the author, but centres the pair in the
-  // bar — without this the block stretches and rides up against the top edge.
-  alignSelf: "center",
+  position: "absolute",
+  left: "50%",
+  top: "50%",
+  transform: "translate(-50%, -50%)",
   display: "flex",
   alignItems: "baseline",
   gap: 9,
-  minWidth: 0,
-  padding: "0 10px",
+  maxWidth: "44%",
+  pointerEvents: "none",
 };
 
 const barTitle: React.CSSProperties = {
@@ -968,44 +976,39 @@ const barSub: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 
-const segmented: React.CSSProperties = {
-  alignSelf: "center",
-  display: "flex",
+/** One switch that flips between a single leaf and a spread. */
+const toggleTrack: React.CSSProperties = {
+  position: "relative",
+  display: "inline-flex",
   alignItems: "center",
-  gap: 2,
-  padding: "3px 8px 3px 3px",
+  width: 52,
+  height: 26,
+  padding: 0,
+  border: "1px solid rgba(255,218,150,0.22)",
   borderRadius: 999,
   background: "rgba(255,228,192,0.05)",
+  cursor: "pointer",
 };
 
-const segment: React.CSSProperties = {
-  minWidth: 22,
-  border: "none",
+const toggleKnob: React.CSSProperties = {
+  position: "absolute",
+  left: 2,
+  top: 2,
+  width: 22,
+  height: 20,
   borderRadius: 999,
-  cursor: "pointer",
+  background: "rgba(255,200,120,0.9)",
+  transition: "transform 160ms ease-out",
+};
+
+const toggleFace: React.CSSProperties = {
+  position: "relative",
+  width: 24,
+  textAlign: "center",
   fontFamily: "system-ui",
   fontSize: 12,
-  padding: "3px 0",
-  transition: "background 140ms, color 140ms",
-};
-
-const segmentLabel: React.CSSProperties = {
-  color: "rgba(255,228,192,0.5)",
-  fontFamily: "system-ui",
-  fontSize: 11.5,
-  marginLeft: 3,
-};
-
-const pill: React.CSSProperties = {
-  background: "none",
-  border: "1px solid rgba(255,218,150,0.28)",
-  borderRadius: 999,
-  color: "#ffe8c0",
-  cursor: "pointer",
-  fontFamily: "system-ui",
-  fontSize: 12,
-  padding: "6px 13px",
-  whiteSpace: "nowrap",
+  fontWeight: 600,
+  transition: "color 160ms",
 };
 
 const progressTrack: React.CSSProperties = {
@@ -1136,6 +1139,22 @@ const definition: React.CSSProperties = {
   fontFamily: "system-ui",
   padding: "12px 14px",
   boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+};
+
+/** Matches the bar's controls, so the two ends of the reader agree. */
+const stepButton: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 30,
+  padding: "0 14px",
+  background: "rgba(255,228,192,0.05)",
+  border: "1px solid rgba(255,218,150,0.2)",
+  borderRadius: 7,
+  color: "#ffe8c0",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 12.5,
+  whiteSpace: "nowrap",
 };
 
 const counter: React.CSSProperties = {
