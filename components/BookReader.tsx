@@ -4,7 +4,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SelectionToolbar from "./SelectionToolbar";
 import AIChatPanel from "./AIChatPanel";
 import CommentModal from "./CommentModal";
-import { Annotation, loadAnnotations, saveAnnotation } from "@/lib/annotations";
+import AnnotationPopover from "./AnnotationPopover";
+import { useAuth } from "@/lib/AuthContext";
+import {
+  Annotation,
+  deleteAnnotation,
+  loadAnnotations,
+  saveAnnotation,
+} from "@/lib/annotations";
+import {
+  Reply,
+  deleteReply,
+  getVotesForReplies,
+  loadReplies,
+  saveReply,
+  voteOnReply,
+} from "@/lib/replies";
 
 export type BookText = {
   title: string;
@@ -199,7 +214,20 @@ export default function BookReader({
    * words are real nodes, so the browser hands us the selection directly
    * instead of it having to be reconstructed from glyph rectangles. */
 
+  const { user } = useAuth();
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // A comment is only worth making if it can be read again, so the thread and
+  // its replies are opened from the marked passage itself.
+  const [openNote, setOpenNote] = useState<
+    { annotation: Annotation; x: number; y: number } | null
+  >(null);
+  const [replies, setReplies] = useState<{ [annotationId: string]: Reply[] }>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyAnonymous, setReplyAnonymous] = useState(false);
   const [selection, setSelection] = useState<
     { text: string; page: number; x: number; y: number } | null
   >(null);
@@ -259,6 +287,7 @@ export default function BookReader({
         visibility: "private",
       });
       if (saved) setAnnotations((all) => [...all, saved]);
+      else setNotice("Sign in to highlight.");
       clearSelection();
     },
     [bookId, selection, clearSelection]
@@ -278,6 +307,7 @@ export default function BookReader({
         visibility,
       });
       if (saved) setAnnotations((all) => [...all, saved]);
+      else setNotice("Sign in to leave a comment.");
       setCommentOpen(false);
       setCommentText("");
       clearSelection();
@@ -310,15 +340,71 @@ export default function BookReader({
     }
   }, [selection, clearSelection]);
 
+  const openNoteAt = useCallback(
+    async (annotation: Annotation, x: number, y: number) => {
+      setOpenNote({ annotation, x, y });
+      try {
+        const list = await loadReplies(annotation.id);
+        const votes = await getVotesForReplies(list.map((r) => r.id));
+        setReplies((all) => ({
+          ...all,
+          [annotation.id]: list.map((r) => ({ ...r, ...(votes.get(r.id) ?? {}) })),
+        }));
+      } catch (e) {
+        console.warn("[reader] replies unavailable:", e);
+      }
+    },
+    []
+  );
+
+  const submitReply = useCallback(
+    async (annotationId: string) => {
+      const body = replyText.trim();
+      if (!body) return;
+      const saved = await saveReply(annotationId, body, replyAnonymous, replyingTo ?? undefined);
+      if (!saved) return setNotice("Sign in to reply.");
+      setReplies((all) => ({ ...all, [annotationId]: [...(all[annotationId] ?? []), saved] }));
+      setReplyText("");
+      setReplyingTo(null);
+    },
+    [replyText, replyAnonymous, replyingTo]
+  );
+
+  const removeAnnotation = useCallback(async (annotationId: string) => {
+    if (!(await deleteAnnotation(annotationId))) return setNotice("Couldn't delete that.");
+    setAnnotations((all) => all.filter((a) => a.id !== annotationId));
+    setOpenNote(null);
+  }, []);
+
+  const removeReply = useCallback(async (replyId: string, annotationId: string) => {
+    if (!(await deleteReply(replyId))) return setNotice("Couldn't delete that reply.");
+    setReplies((all) => ({
+      ...all,
+      [annotationId]: (all[annotationId] ?? []).filter((r) => r.id !== replyId),
+    }));
+  }, []);
+
+  const vote = useCallback(async (replyId: string, value: 1 | -1 | null) => {
+    await voteOnReply(replyId, value);
+    const votes = await getVotesForReplies([replyId]);
+    setReplies((all) => {
+      const next: typeof all = {};
+      for (const [id, list] of Object.entries(all)) {
+        next[id] = list.map((r) =>
+          r.id === replyId ? { ...r, ...(votes.get(replyId) ?? {}) } : r
+        );
+      }
+      return next;
+    });
+  }, []);
+
   /** Every highlighted phrase, longest first so a phrase wins over a word inside it. */
   const marks = useMemo(() => {
-    const out = new Map<string, { color: string; comment?: string }>();
+    const out = new Map<string, Annotation>();
     for (const a of annotations) {
-      const quote = (a.data as { quote?: string; selectedText?: string })?.quote
-        ?? (a.data as { selectedText?: string })?.selectedText;
-      if (quote && quote.length > 2) {
-        out.set(quote, { color: a.color || "#ffd97a", comment: a.comment });
-      }
+      const data = a.data as { quote?: string; selectedText?: string } | undefined;
+      const quote = data?.quote ?? data?.selectedText;
+      if (quote && quote.length > 2) out.set(quote, a);
     }
     return [...out.entries()].sort((x, y) => y[0].length - x[0].length);
   }, [annotations]);
@@ -552,7 +638,7 @@ export default function BookReader({
                 b.kind === "heading" ? (
                   <h2 key={j} style={chapterHeading}>{b.text}</h2>
                 ) : (
-                  <p key={j} style={paragraph}>{withMarks(b.text, marks)}</p>
+                  <p key={j} style={paragraph}>{withMarks(b.text, marks, openNoteAt)}</p>
                 )
               )}
               <span aria-hidden style={folio}>{first + i}</span>
@@ -607,6 +693,41 @@ export default function BookReader({
         />
       )}
 
+      {openNote && (
+        <AnnotationPopover
+          annotation={openNote.annotation}
+          position={{ x: openNote.x, y: openNote.y }}
+          replies={replies[openNote.annotation.id] ?? []}
+          expandedComments={expanded}
+          showReplyInput={replyingTo}
+          replyText={replyText}
+          replyAnonymous={replyAnonymous}
+          currentUserId={user?.id}
+          onClose={() => setOpenNote(null)}
+          onToggleExpanded={(id) =>
+            setExpanded((cur) => {
+              const next = new Set(cur);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onReplyClick={(id) => setReplyingTo((cur) => (cur === id ? null : id))}
+          onDeleteAnnotation={removeAnnotation}
+          onDeleteReply={removeReply}
+          onReplyTextChange={setReplyText}
+          onReplyAnonymousChange={setReplyAnonymous}
+          onSubmitReply={submitReply}
+          onVote={vote}
+        />
+      )}
+
+      {notice && (
+        <div style={noticeStyle} onClick={() => setNotice(null)}>
+          {notice}
+        </div>
+      )}
+
       {define && (
         <div
           style={{
@@ -643,30 +764,41 @@ export default function BookReader({
  */
 function withMarks(
   text: string,
-  marks: [string, { color: string; comment?: string }][]
+  marks: [string, Annotation][],
+  onOpen: (a: Annotation, x: number, y: number) => void
 ): React.ReactNode {
   const hit = marks.find(([quote]) => text.includes(quote));
   if (!hit) return text;
 
-  const [quote, style] = hit;
+  const [quote, annotation] = hit;
   const at = text.indexOf(quote);
+  const hasComment = Boolean(annotation.comment);
+
   return (
     <>
-      {withMarks(text.slice(0, at), marks)}
+      {withMarks(text.slice(0, at), marks, onOpen)}
       <mark
-        title={style.comment}
+        onClick={(e) => {
+          e.stopPropagation();
+          const box = (e.target as HTMLElement).getBoundingClientRect();
+          onOpen(annotation, box.left + box.width / 2, box.top);
+        }}
         style={{
-          background: style.color,
+          background: annotation.color || "#ffd97a",
           color: "inherit",
           borderRadius: 2,
           padding: "0 1px",
+          cursor: hasComment ? "pointer" : "text",
+          // A commented passage is marked as well as coloured, so it can be
+          // told apart from a plain highlight without hovering it.
+          borderBottom: hasComment ? "2px solid rgba(90,50,10,0.55)" : "none",
           boxDecorationBreak: "clone",
           WebkitBoxDecorationBreak: "clone",
         }}
       >
         {quote}
       </mark>
-      {withMarks(text.slice(at + quote.length), marks)}
+      {withMarks(text.slice(at + quote.length), marks, onOpen)}
     </>
   );
 }
@@ -892,6 +1024,22 @@ const footer: React.CSSProperties = {
   gap: 18,
   padding: "10px 20px 16px",
   zIndex: 3,
+};
+
+const noticeStyle: React.CSSProperties = {
+  position: "fixed",
+  bottom: 68,
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 70,
+  background: "rgba(60,20,10,0.95)",
+  border: "1px solid rgba(255,170,140,0.45)",
+  borderRadius: 8,
+  color: "#ffd9c8",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 12,
+  padding: "8px 14px",
 };
 
 const definition: React.CSSProperties = {
