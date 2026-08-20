@@ -6,9 +6,17 @@ export type BookText = {
   title: string;
   author: string;
   pageCount: number;
+  /** The source page's dimensions, so sheets keep the book's real shape. */
+  pageSize?: { width: number; height: number } | null;
   chapters: { title: string; page: number }[];
   pages: { page: number; paragraphs: string[] }[];
 };
+
+// Width of a sheet on screen, and the margins printed inside it.
+const SHEET_WIDTH = 620;
+const SHEET_PADDING = 68;
+// Used only for books extracted before page sizes were recorded.
+const FALLBACK_ASPECT = 0.72;
 
 type Status = "loading" | "ready" | "missing" | "error";
 
@@ -132,6 +140,12 @@ export default function BookReader({
 
   const progress = Math.round((page / Math.max(text.pageCount, 1)) * 100);
 
+  // Sheets take the proportions of the book's own pages.
+  const aspect = text.pageSize?.height
+    ? text.pageSize.width / text.pageSize.height
+    : FALLBACK_ASPECT;
+  const sheetHeight = Math.round(SHEET_WIDTH / aspect);
+
   return (
     <main style={shell}>
       <header style={bar}>
@@ -184,25 +198,33 @@ export default function BookReader({
       )}
 
       <div ref={scrollerRef} onScroll={onScroll} style={scroller}>
-        <article style={measure}>
-          <h1 style={bookTitle}>{title}</h1>
-          {author && <p style={bookAuthor}>{author}</p>}
+        <article style={stack}>
+          {/* A title page, so the book opens the way a book does. */}
+          <section style={{ ...sheet, minHeight: sheetHeight, ...titleSheet }}>
+            <h1 style={bookTitle}>{title}</h1>
+            {author && <p style={bookAuthor}>{author}</p>}
+          </section>
 
           {text.pages.map((p) => {
             const heading = chapterAt.get(p.page);
             return (
-              <section key={p.page} data-page={p.page} style={{ position: "relative" }}>
-                {/* The page number lives in the margin: present for finding a
-                    passage again, quiet enough to read past. */}
-                <span aria-hidden style={folio}>
-                  {p.page}
-                </span>
+              <section
+                key={p.page}
+                data-page={p.page}
+                style={{ ...sheet, minHeight: sheetHeight }}
+              >
                 {heading && <h2 style={chapterHeading}>{heading}</h2>}
                 {p.paragraphs.map((para, i) => (
                   <p key={i} style={paragraph}>
                     {para}
                   </p>
                 ))}
+                {/* The page's own number, where a printed book puts it. A sheet
+                    grows rather than clipping if reflowed text runs long, so
+                    nothing is ever hidden to keep the shape. */}
+                <span aria-hidden style={folio}>
+                  {p.page}
+                </span>
               </section>
             );
           })}
@@ -326,17 +348,47 @@ const contentsItem: React.CSSProperties = {
 const scroller: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
-  background: PAPER,
+  // Sheets sit on a dark surface, the way pages sit on a desk.
+  background: "#100a03",
 };
 
-const measure: React.CSSProperties = {
-  margin: "0 auto",
-  maxWidth: "34rem", // ~66 characters at this size
-  padding: "72px 28px 140px",
+const stack: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 26,
+  padding: "34px 20px 120px",
   color: INK,
   fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
   fontSize: 19,
   lineHeight: 1.75,
+};
+
+/**
+ * One page of the book.
+ *
+ * `minHeight` rather than a fixed height: the shape is what matters, but
+ * reflowed text sets to a different depth than the original typesetting did, so
+ * a sheet is allowed to run long instead of hiding the overflow.
+ */
+const sheet: React.CSSProperties = {
+  position: "relative",
+  width: "100%",
+  maxWidth: SHEET_WIDTH,
+  boxSizing: "border-box",
+  padding: `${SHEET_PADDING}px ${SHEET_PADDING}px ${SHEET_PADDING + 18}px`,
+  background: PAPER,
+  borderRadius: 3,
+  boxShadow: "0 14px 40px rgba(0,0,0,0.45), 0 2px 4px rgba(0,0,0,0.3)",
+  overflow: "hidden",
+};
+
+const titleSheet: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  textAlign: "center",
 };
 
 const bookTitle: React.CSSProperties = {
@@ -366,14 +418,20 @@ const paragraph: React.CSSProperties = {
   margin: "0 0 1.15em",
   textAlign: "justify",
   hyphens: "auto",
+  // Contents pages carry dot leaders — runs of punctuation with no space in
+  // them — which would otherwise sail off the edge of the sheet.
+  overflowWrap: "anywhere",
 };
 
 const folio: React.CSSProperties = {
   position: "absolute",
-  left: -46,
+  bottom: 24,
+  left: 0,
+  right: 0,
+  textAlign: "center",
   fontFamily: "system-ui",
   fontSize: 10.5,
-  opacity: 0.26,
+  opacity: 0.32,
   userSelect: "none",
 };
 

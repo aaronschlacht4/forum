@@ -281,8 +281,15 @@ async function extract(book, pdfjs) {
   }).promise;
 
   const raw = [];
+  let pageSize = null;
   for (let n = 1; n <= doc.numPages; n++) {
     const page = await doc.getPage(n);
+    if (!pageSize) {
+      // Kept so the reader can set sheets to the shape of the real page rather
+      // than inventing a proportion.
+      const { width, height } = page.getViewport({ scale: 1 });
+      pageSize = { width: Math.round(width), height: Math.round(height) };
+    }
     raw.push(toLines(await page.getTextContent()));
     page.cleanup();
   }
@@ -305,8 +312,9 @@ async function extract(book, pdfjs) {
     title: book.title,
     author: book.author,
     source: book.pdf_path,
-    format: 1,
+    format: 2,
     pageCount: pages.length,
+    pageSize,
     chapters,
     pages,
   };
