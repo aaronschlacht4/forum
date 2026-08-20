@@ -234,6 +234,7 @@ export default function BookReader({
     { word: string; definition: string; partOfSpeech?: string; phonetic?: string; x: number; y: number } | null
   >(null);
   const deskRef = useRef<HTMLDivElement>(null);
+  const spreadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadAnnotations(bookId)
@@ -518,10 +519,19 @@ export default function BookReader({
   const zoneCursor =
     zone === "back" ? "w-resize" : zone === "next" ? "e-resize" : "default";
 
-  /** Which third of the reading area a point falls in. */
+  /**
+   * Which third of the paper a point falls in.
+   *
+   * Measured against the spread rather than the whole desk: on one page a
+   * single sheet sits centred in a much wider desk, so a third of the *desk*
+   * left most of the page in the dead middle and clicking it did nothing.
+   * Anything out in the margins beyond the paper turns the way it points.
+   */
   const zoneAt = (clientX: number): "back" | "next" | null => {
-    const rect = deskRef.current?.getBoundingClientRect();
-    if (!rect || panelOpen) return null;
+    const rect = spreadRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || panelOpen) return null;
+    if (clientX < rect.left) return "back";
+    if (clientX > rect.right) return "next";
     const across = (clientX - rect.left) / rect.width;
     if (across <= 1 / 3) return "back";
     if (across >= 2 / 3) return "next";
@@ -682,6 +692,7 @@ export default function BookReader({
             without going hunting for a control. A click that finished a text
             selection is left alone. */}
         <div
+          ref={spreadRef}
           style={{
             display: "flex",
             gap: GUTTER,
