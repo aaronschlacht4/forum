@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import SelectionToolbar from "./SelectionToolbar";
+import AIChatPanel from "./AIChatPanel";
+import CommentModal from "./CommentModal";
+import { Annotation, loadAnnotations, saveAnnotation } from "@/lib/annotations";
 
 export type BookText = {
   title: string;
@@ -12,25 +16,134 @@ export type BookText = {
   pages: { page: number; paragraphs: string[] }[];
 };
 
-// Width of a sheet on screen, and the margins printed inside it.
-const SHEET_WIDTH = 620;
-const SHEET_PADDING = 68;
-// Used only for books extracted before page sizes were recorded.
-const FALLBACK_ASPECT = 0.72;
-
 type Status = "loading" | "ready" | "missing" | "error";
 
+/** Used only for books extracted before page sizes were recorded. */
+const FALLBACK_ASPECT = 0.72;
+
+type Block = { kind: "heading" | "para"; text: string; page: number };
+/** One sheet on screen. `from`/`to` record where in the source it came from. */
+type Sheet = { blocks: Block[]; from: number; to: number };
+
 /**
- * Reads a book as text rather than as pictures of pages.
+ * Lays the text out into sheets that don't scroll.
  *
- * The PDF viewer draws each page to a canvas, so the words are an image: they
- * don't reflow, don't scale with the reader's own type size, and can't be
- * selected or searched by the browser. This sets the extracted text as real
- * type — one measure, continuous, the way a book is actually read.
+ * Pages here are the reader's own, not the PDF's: the text is poured into
+ * sheets and broken wherever a sheet fills, so nothing has to shrink to fit and
+ * nothing needs a scrollbar. Type stays one size throughout, which is the whole
+ * point — sizing per page to avoid overflow would set every page differently.
  *
- * Page numbers are kept as markers down the margin. They are how annotations
- * are anchored, and they're how someone finds a passage again, so losing them
- * to a continuous scroll would cost more than it saved.
+ * Each sheet still records which pages of the source it drew from, so a
+ * position in the book can be traced back if anything needs to.
+ *
+ * Heights come from measuring the real thing in a hidden copy of the sheet's
+ * text column, because a paragraph's depth depends on where its words wrap.
+ */
+function paginate(
+  blocks: Block[],
+  columnWidth: number,
+  columnHeight: number,
+  fontSize: number
+): Sheet[] {
+  if (typeof document === "undefined" || columnWidth < 40 || columnHeight < 40) return [];
+
+  const probe = document.createElement("div");
+  Object.assign(probe.style, {
+    position: "absolute",
+    visibility: "hidden",
+    pointerEvents: "none",
+    left: "-10000px",
+    top: "0",
+    width: `${columnWidth}px`,
+    fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
+    fontSize: `${fontSize}px`,
+    lineHeight: "1.72",
+    textAlign: "justify",
+    hyphens: "auto",
+  } as CSSStyleDeclaration);
+
+  probe.innerHTML = blocks
+    .map((b) =>
+      b.kind === "heading"
+        ? `<h2 style="font-size:.8em;font-weight:600;letter-spacing:1.6px;text-transform:uppercase;margin:1.4em 0 1em">${escapeHtml(b.text)}</h2>`
+        : `<p style="margin:0 0 1.05em;overflow-wrap:anywhere">${escapeHtml(b.text)}</p>`
+    )
+    .join("");
+  document.body.appendChild(probe);
+
+  // One layout pass for the whole book, then arithmetic.
+  const heights = [...probe.children].map((el) => {
+    const style = getComputedStyle(el);
+    return (el as HTMLElement).offsetHeight + parseFloat(style.marginBottom || "0");
+  });
+  const lineHeight = fontSize * 1.72;
+  document.body.removeChild(probe);
+
+  const sheets: Sheet[] = [];
+  let current: Block[] = [];
+  let used = 0;
+
+  const close = () => {
+    if (!current.length) return;
+    sheets.push({
+      blocks: current,
+      from: current[0].page,
+      to: current[current.length - 1].page,
+    });
+    current = [];
+    used = 0;
+  };
+
+  blocks.forEach((block, i) => {
+    const height = heights[i] ?? lineHeight;
+
+    // A paragraph taller than a whole sheet has to be broken mid-flow. Split it
+    // by words in proportion to how far it overruns; every word survives, which
+    // is what matters.
+    if (height > columnHeight) {
+      close();
+      const pieces = Math.ceil(height / columnHeight);
+      const words = block.text.split(" ");
+      const per = Math.ceil(words.length / pieces);
+      for (let p = 0; p < pieces; p++) {
+        const slice = words.slice(p * per, (p + 1) * per).join(" ");
+        if (slice) {
+          sheets.push({ blocks: [{ ...block, text: slice }], from: block.page, to: block.page });
+        }
+      }
+      return;
+    }
+
+    // A heading at the foot of a sheet would be stranded from what it heads.
+    const orphanHeading = block.kind === "heading" && used + height * 2.5 > columnHeight;
+    if ((used + height > columnHeight || orphanHeading) && current.length) close();
+
+    current.push(block);
+    used += height;
+  });
+  close();
+
+  return sheets;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+}
+/** Room taken by the bar, the progress line and the breathing space around a sheet. */
+const CHROME_HEIGHT = 150;
+const GUTTER = 26;
+
+/**
+ * Reads a book as text, a page at a time.
+ *
+ * The PDF viewer drew each page to a canvas, so the words were an image: they
+ * didn't reflow, didn't scale with the reader's own type size, and couldn't be
+ * selected or searched. This sets the extracted text as real type, but keeps the
+ * page as the unit you move through — one leaf or a two-page spread, turned by
+ * clicking or with the arrow keys.
+ *
+ * Page numbers are real, not decoration. They are how annotations are anchored
+ * and how a passage is found again.
  */
 export default function BookReader({
   bookId,
@@ -45,9 +158,12 @@ export default function BookReader({
 }) {
   const [text, setText] = useState<BookText | null>(null);
   const [status, setStatus] = useState<Status>("loading");
-  const [page, setPage] = useState(1);
+  const [leaf, setLeaf] = useState(1); // leftmost page on screen
+  const [spread, setSpread] = useState<1 | 2>(2);
+  const [turn, setTurn] = useState<{ dir: "next" | "back"; n: number }>({ dir: "next", n: 0 });
   const [showContents, setShowContents] = useState(false);
-  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ w: 1280, h: 800 });
+  const [sheets, setSheets] = useState<Sheet[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,50 +187,242 @@ export default function BookReader({
     return () => { cancelled = true; };
   }, [bookId]);
 
-  /** Chapter headings, keyed by the page they open on. */
-  const chapterAt = useMemo(() => {
-    const map = new Map<number, string>();
-    text?.chapters.forEach((c) => {
-      if (!map.has(c.page)) map.set(c.page, c.title);
-    });
-    return map;
-  }, [text]);
+  useEffect(() => {
+    const measure = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  /* ---- Marking up the text ----
+   * Selection is the one thing that gets easier by leaving the PDF behind: the
+   * words are real nodes, so the browser hands us the selection directly
+   * instead of it having to be reconstructed from glyph rectangles. */
+
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [selection, setSelection] = useState<
+    { text: string; page: number; x: number; y: number } | null
+  >(null);
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [commentVisibility, setCommentVisibility] = useState<"public" | "private">("public");
+  const [chatFor, setChatFor] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [define, setDefine] = useState<
+    { word: string; definition: string; partOfSpeech?: string; phonetic?: string; x: number; y: number } | null
+  >(null);
+  const deskRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    loadAnnotations(bookId)
+      .then(setAnnotations)
+      .catch((e) => console.warn("[reader] annotations unavailable:", e?.message ?? e));
+  }, [bookId]);
+
+  // Reading a selection on mouse-up keeps the toolbar from flickering while the
+  // pointer is still dragging across the words.
+  useEffect(() => {
+    const onUp = () => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() ?? "";
+      if (!text || !sel?.rangeCount) return setSelection(null);
+
+      const range = sel.getRangeAt(0);
+      const sheet = (range.startContainer.parentElement as HTMLElement | null)?.closest<HTMLElement>("[data-source]");
+      if (!sheet || !deskRef.current?.contains(sheet)) return setSelection(null);
+
+      const box = range.getBoundingClientRect();
+      setSelection({
+        text,
+        page: Number(sheet.dataset.source ?? 1),
+        x: box.left + box.width / 2,
+        y: box.top,
+      });
+    };
+    document.addEventListener("mouseup", onUp);
+    return () => document.removeEventListener("mouseup", onUp);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  }, []);
+
+  /** Highlights are stored against the words, not a rectangle on a page. */
+  const addHighlight = useCallback(
+    async (color: string) => {
+      if (!selection) return;
+      const saved = await saveAnnotation(bookId, {
+        pageNumber: selection.page,
+        type: "highlight",
+        data: { selectedText: selection.text, color, quote: selection.text },
+        color,
+        visibility: "private",
+      });
+      if (saved) setAnnotations((all) => [...all, saved]);
+      clearSelection();
+    },
+    [bookId, selection, clearSelection]
+  );
+
+  const addComment = useCallback(
+    async () => {
+      const comment = commentText.trim();
+      if (!selection || !comment) return;
+      const visibility = commentVisibility;
+      const saved = await saveAnnotation(bookId, {
+        pageNumber: selection.page,
+        type: "highlight",
+        data: { selectedText: selection.text, quote: selection.text, color: "#ffd97a" },
+        comment,
+        color: "#ffd97a",
+        visibility,
+      });
+      if (saved) setAnnotations((all) => [...all, saved]);
+      setCommentOpen(false);
+      setCommentText("");
+      clearSelection();
+    },
+    [bookId, selection, clearSelection, commentText, commentVisibility]
+  );
+
+  const lookUp = useCallback(async () => {
+    if (!selection) return;
+    const word = selection.text.split(/\s+/)[0].replace(/[^a-zA-Z'-]/g, "");
+    if (!word) return;
+    const at = { x: selection.x, y: selection.y };
+    clearSelection();
+    try {
+      const res = await fetch(
+        `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`
+      );
+      if (!res.ok) throw new Error("not found");
+      const [entry] = await res.json();
+      const meaning = entry?.meanings?.[0];
+      setDefine({
+        word: entry?.word ?? word,
+        phonetic: entry?.phonetic,
+        partOfSpeech: meaning?.partOfSpeech,
+        definition: meaning?.definitions?.[0]?.definition ?? "No definition found.",
+        ...at,
+      });
+    } catch {
+      setDefine({ word, definition: "No definition found.", ...at });
+    }
+  }, [selection, clearSelection]);
+
+  /** Every highlighted phrase, longest first so a phrase wins over a word inside it. */
+  const marks = useMemo(() => {
+    const out = new Map<string, { color: string; comment?: string }>();
+    for (const a of annotations) {
+      const quote = (a.data as { quote?: string; selectedText?: string })?.quote
+        ?? (a.data as { selectedText?: string })?.selectedText;
+      if (quote && quote.length > 2) {
+        out.set(quote, { color: a.color || "#ffd97a", comment: a.comment });
+      }
+    }
+    return [...out.entries()].sort((x, y) => y[0].length - x[0].length);
+  }, [annotations]);
+
+  // A narrow window has no room for two pages side by side.
+  const columns = viewport.w < 900 ? 1 : spread;
+
+  // Navigation counts sheets; the book's own page numbers are what get shown.
+  const total = Math.max(1, sheets.length);
+
+  const goTo = useCallback(
+    (target: number, dir: "next" | "back") => {
+      setLeaf(Math.max(1, Math.min(total, target)));
+      setTurn((t) => ({ dir, n: t.n + 1 })); // n forces the turn to replay
+    },
+    [total]
+  );
+
+  const next = useCallback(() => {
+    if (leaf + columns <= total) goTo(leaf + columns, "next");
+  }, [leaf, columns, total, goTo]);
+
+  const back = useCallback(() => {
+    if (leaf > 1) goTo(leaf - columns, "back");
+  }, [leaf, columns, goTo]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); next(); }
+      if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); back(); }
+      if (e.key === "Escape") setShowContents(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [next, back]);
 
   const currentChapter = useMemo(() => {
     if (!text) return null;
     let found: string | null = null;
+    const onScreen = sheets[Math.min(leaf, sheets.length) - 1]?.to ?? 1;
     for (const c of text.chapters) {
-      if (c.page <= page) found = c.title;
+      if (c.page <= onScreen) found = c.title;
       else break;
     }
     return found;
-  }, [text, page]);
+  }, [text, sheets, leaf]);
 
-  // Which page is under the reader's eye, for the progress line and so the
-  // contents list can say where they are.
-  const onScroll = useCallback(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const marks = el.querySelectorAll<HTMLElement>("[data-page]");
-    const eyeline = el.scrollTop + el.clientHeight * 0.3;
-    let seen = 1;
-    for (const mark of marks) {
-      if (mark.offsetTop <= eyeline) seen = Number(mark.dataset.page);
-      else break;
+  /* ---- Sheet size: a page as large as the window allows, in the book's own
+     proportions, so a spread never overflows either dimension. ---- */
+  const aspect = text?.pageSize?.height
+    ? text.pageSize.width / text.pageSize.height
+    : FALLBACK_ASPECT;
+  const roomH = Math.max(320, viewport.h - CHROME_HEIGHT);
+  const roomW = Math.max(280, viewport.w - 120 - (columns - 1) * GUTTER) / columns;
+  const sheetH = Math.min(roomH, roomW / aspect);
+  const sheetW = sheetH * aspect;
+  // Type is sized so a sheet carries roughly what a page of the source carries.
+  // Characters that fit ~= (column width / average glyph width) * lines, and for
+  // this face a glyph runs about half the point size, so solving for the size
+  // gives the expression below. Clamped to stay readable either way.
+  const perSourcePage = text
+    ? Math.max(
+        600,
+        Math.round(
+          text.pages.reduce(
+            (n, pg) => n + pg.paragraphs.reduce((m, t) => m + t.length, 0),
+            0
+          ) / Math.max(text.pageCount, 1)
+        )
+      )
+    : 1800;
+  const padX = sheetW * 0.11;
+  const padY = sheetH * 0.085;
+  const columnW = sheetW - padX * 2;
+  const columnH = sheetH - padY - sheetH * 0.11; // foot leaves room for the folio
+  const fontSize = Math.max(
+    10.5,
+    Math.min(16, Math.sqrt((columnW * columnH) / (0.86 * perSourcePage)))
+  );
+
+  /** Every heading and paragraph in the book, tagged with the page it came from. */
+  const blocks = useMemo<Block[]>(() => {
+    if (!text) return [];
+    const out: Block[] = [];
+    for (const p of text.pages) {
+      const heading = text.chapters.find((c) => c.page === p.page)?.title;
+      if (heading) out.push({ kind: "heading", text: heading, page: p.page });
+      for (const para of p.paragraphs) out.push({ kind: "para", text: para, page: p.page });
     }
-    setPage(seen);
-  }, []);
+    return out;
+  }, [text]);
 
-  const goToPage = useCallback((target: number) => {
-    const el = scrollerRef.current;
-    const mark = el?.querySelector<HTMLElement>(`[data-page="${target}"]`);
-    if (el && mark) el.scrollTo({ top: mark.offsetTop - 24, behavior: "smooth" });
-    setShowContents(false);
-  }, []);
+  // Measuring touches the DOM, so it waits for a frame and rides out a resize
+  // rather than running on every pixel of a drag.
+  useEffect(() => {
+    if (!blocks.length) return setSheets([]);
+    const id = setTimeout(
+      () => setSheets(paginate(blocks, columnW, columnH, fontSize)),
+      120
+    );
+    return () => clearTimeout(id);
+  }, [blocks, columnW, columnH, fontSize]);
 
-  if (status === "loading") {
-    return <Centered>Setting the type…</Centered>;
-  }
+  if (status === "loading") return <Centered>Setting the type…</Centered>;
 
   if (status !== "ready" || !text) {
     return (
@@ -129,29 +437,30 @@ export default function BookReader({
             node scripts/extract-books.mjs --upload
           </code>
         )}
-        {onOpenPdf && (
-          <button onClick={onOpenPdf} style={linkButton}>
-            Read the PDF instead
-          </button>
-        )}
+        {onOpenPdf && <button onClick={onOpenPdf} style={pill}>Read the PDF instead</button>}
       </Centered>
     );
   }
 
-  const progress = Math.round((page / Math.max(text.pageCount, 1)) * 100);
-
-  // Sheets take the proportions of the book's own pages.
-  const aspect = text.pageSize?.height
-    ? text.pageSize.width / text.pageSize.height
-    : FALLBACK_ASPECT;
-  const sheetHeight = Math.round(SHEET_WIDTH / aspect);
+  // Clamped rather than corrected in an effect, so a relayout can't leave the
+  // view pointing past the end of the book for a frame.
+  const first = Math.max(1, Math.min(leaf, Math.max(1, sheets.length)));
+  const visible = sheets.slice(first - 1, first - 1 + columns);
+  const progress = Math.round(((first + columns - 1) / total) * 100);
+  const atStart = first <= 1;
+  const atEnd = first + columns > total;
 
   return (
     <main style={shell}>
+      <style>{`
+        @keyframes leafInRight { from { opacity: 0; transform: translateX(58px); }
+                                 to   { opacity: 1; transform: none; } }
+        @keyframes leafInLeft  { from { opacity: 0; transform: translateX(-58px); }
+                                 to   { opacity: 1; transform: none; } }
+      `}</style>
+
       <header style={bar}>
-        <a href="/library" style={{ ...linkButton, textDecoration: "none" }}>
-          ← Library
-        </a>
+        <a href="/library" style={{ ...pill, textDecoration: "none" }}>← Library</a>
 
         <div style={{ textAlign: "center", minWidth: 0 }}>
           <div style={barTitle}>{title}</div>
@@ -161,21 +470,33 @@ export default function BookReader({
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+          {viewport.w >= 900 && (
+            <div style={toggleGroup}>
+              {([1, 2] as const).map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setSpread(n)}
+                  title={n === 1 ? "One page" : "Two pages"}
+                  style={{
+                    ...toggleButton,
+                    background: spread === n ? "rgba(255,200,120,0.22)" : "transparent",
+                    color: spread === n ? "#ffe8c0" : "rgba(255,228,192,0.6)",
+                  }}
+                >
+                  {n === 1 ? "1 page" : "2 pages"}
+                </button>
+              ))}
+            </div>
+          )}
           {text.chapters.length > 0 && (
-            <button onClick={() => setShowContents((v) => !v)} style={linkButton}>
-              Contents
-            </button>
+            <button onClick={() => setShowContents((v) => !v)} style={pill}>Contents</button>
           )}
-          {onOpenPdf && (
-            <button onClick={onOpenPdf} style={linkButton}>
-              PDF
-            </button>
-          )}
+          {onOpenPdf && <button onClick={onOpenPdf} style={pill}>PDF</button>}
         </div>
       </header>
 
-      <div style={{ ...progressTrack }}>
+      <div style={progressTrack}>
         <div style={{ ...progressFill, width: `${progress}%` }} />
       </div>
 
@@ -184,7 +505,14 @@ export default function BookReader({
           {text.chapters.map((c) => (
             <button
               key={`${c.title}-${c.page}`}
-              onClick={() => goToPage(c.page)}
+              onClick={() => {
+                // The first sheet that reached the source page this chapter
+                // opens on.
+                const i = sheets.findIndex((sh) => sh.to >= c.page);
+                const target = i === -1 ? 1 : i + 1;
+                goTo(target, target >= leaf ? "next" : "back");
+                setShowContents(false);
+              }}
               style={{
                 ...contentsItem,
                 color: c.title === currentChapter ? "#ffe8c0" : "rgba(255,228,192,0.62)",
@@ -197,42 +525,190 @@ export default function BookReader({
         </nav>
       )}
 
-      <div ref={scrollerRef} onScroll={onScroll} style={scroller}>
-        <article style={stack}>
-          {/* A title page, so the book opens the way a book does. */}
-          <section style={{ ...sheet, minHeight: sheetHeight, ...titleSheet }}>
-            <h1 style={bookTitle}>{title}</h1>
-            {author && <p style={bookAuthor}>{author}</p>}
-          </section>
+      <div ref={deskRef} style={desk}>
+        {/* Clicking the outer thirds turns the page, so the book can be read
+            without going hunting for a control. A click that finished a text
+            selection is left alone. */}
+        <TurnZone side="left" disabled={atStart} onTurn={back} />
+        <TurnZone side="right" disabled={atEnd} onTurn={next} />
 
-          {text.pages.map((p) => {
-            const heading = chapterAt.get(p.page);
-            return (
-              <section
-                key={p.page}
-                data-page={p.page}
-                style={{ ...sheet, minHeight: sheetHeight }}
-              >
-                {heading && <h2 style={chapterHeading}>{heading}</h2>}
-                {p.paragraphs.map((para, i) => (
-                  <p key={i} style={paragraph}>
-                    {para}
-                  </p>
-                ))}
-                {/* The page's own number, where a printed book puts it. A sheet
-                    grows rather than clipping if reflowed text runs long, so
-                    nothing is ever hidden to keep the shape. */}
-                <span aria-hidden style={folio}>
-                  {p.page}
-                </span>
-              </section>
-            );
-          })}
-
-          <footer style={endMark}>{text.pageCount} pages · end</footer>
-        </article>
+        <div style={{ display: "flex", gap: GUTTER, alignItems: "flex-start" }}>
+          {visible.map((sh, i) => (
+            <section
+              key={`${turn.n}-${leaf}-${i}`}
+              data-page={first + i}
+              data-source={sh.from}
+              style={{
+                ...sheet,
+                width: sheetW,
+                height: sheetH,
+                padding: `${padY}px ${padX}px ${sheetH * 0.11}px`,
+                fontSize,
+                animation: `${turn.dir === "next" ? "leafInRight" : "leafInLeft"} 260ms ease-out both`,
+                animationDelay: `${i * 55}ms`,
+              }}
+            >
+              {sh.blocks.map((b, j) =>
+                b.kind === "heading" ? (
+                  <h2 key={j} style={chapterHeading}>{b.text}</h2>
+                ) : (
+                  <p key={j} style={paragraph}>{withMarks(b.text, marks)}</p>
+                )
+              )}
+              <span aria-hidden style={folio}>{first + i}</span>
+            </section>
+          ))}
+        </div>
       </div>
+
+      <footer style={footer}>
+        <button onClick={back} disabled={atStart} style={{ ...pill, opacity: atStart ? 0.35 : 1 }}>
+          ‹ Back
+        </button>
+        <span style={counter}>
+          {columns === 2 && visible.length > 1 ? `${first}–${first + 1}` : first} of {total}
+        </span>
+        <button onClick={next} disabled={atEnd} style={{ ...pill, opacity: atEnd ? 0.35 : 1 }}>
+          Next ›
+        </button>
+      </footer>
+      {selection && !commentOpen && !chatFor && (
+        <SelectionToolbar
+          position={{ x: selection.x, y: selection.y }}
+          onHighlight={addHighlight}
+          onComment={() => setCommentOpen(true)}
+          onDefine={lookUp}
+          onAIChat={() => {
+            setChatFor({ text: selection.text, x: selection.x, y: selection.y });
+            setSelection(null);
+          }}
+          onDismiss={clearSelection}
+        />
+      )}
+
+      {commentOpen && selection && (
+        <CommentModal
+          show
+          selectedText={selection.text}
+          commentText={commentText}
+          visibility={commentVisibility}
+          onCommentTextChange={setCommentText}
+          onVisibilityChange={setCommentVisibility}
+          onSave={addComment}
+          onClose={() => { setCommentOpen(false); setCommentText(""); clearSelection(); }}
+        />
+      )}
+
+      {chatFor && (
+        <AIChatPanel
+          selectedText={chatFor.text}
+          position={{ x: chatFor.x, y: chatFor.y }}
+          onClose={() => setChatFor(null)}
+        />
+      )}
+
+      {define && (
+        <div
+          style={{
+            ...definition,
+            left: Math.min(Math.max(define.x - 140, 12), viewport.w - 292),
+            top: Math.max(define.y - 130, 12),
+          }}
+          onClick={() => setDefine(null)}
+        >
+          <div style={{ fontWeight: 600, fontSize: 14 }}>
+            {define.word}
+            {define.phonetic && (
+              <span style={{ opacity: 0.55, fontWeight: 400 }}> {define.phonetic}</span>
+            )}
+          </div>
+          {define.partOfSpeech && (
+            <div style={{ fontStyle: "italic", opacity: 0.6, fontSize: 11, margin: "2px 0 6px" }}>
+              {define.partOfSpeech}
+            </div>
+          )}
+          <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{define.definition}</div>
+        </div>
+      )}
     </main>
+  );
+}
+
+/**
+ * Wraps any highlighted phrases found in a paragraph.
+ *
+ * Highlights are anchored to the words rather than to a rectangle, so they
+ * survive the text being re-broken into different pages at a different size —
+ * which a set of coordinates on a PDF page could not.
+ */
+function withMarks(
+  text: string,
+  marks: [string, { color: string; comment?: string }][]
+): React.ReactNode {
+  const hit = marks.find(([quote]) => text.includes(quote));
+  if (!hit) return text;
+
+  const [quote, style] = hit;
+  const at = text.indexOf(quote);
+  return (
+    <>
+      {withMarks(text.slice(0, at), marks)}
+      <mark
+        title={style.comment}
+        style={{
+          background: style.color,
+          color: "inherit",
+          borderRadius: 2,
+          padding: "0 1px",
+          boxDecorationBreak: "clone",
+          WebkitBoxDecorationBreak: "clone",
+        }}
+      >
+        {quote}
+      </mark>
+      {withMarks(text.slice(at + quote.length), marks)}
+    </>
+  );
+}
+
+/** A click strip down one edge of the desk. */
+function TurnZone({
+  side,
+  disabled,
+  onTurn,
+}: {
+  side: "left" | "right";
+  disabled: boolean;
+  onTurn: () => void;
+}) {
+  const [hot, setHot] = useState(false);
+  if (disabled) return null;
+  return (
+    <button
+      aria-label={side === "right" ? "Next page" : "Previous page"}
+      onClick={() => {
+        // Don't turn the page out from under someone who was selecting text.
+        if (window.getSelection()?.toString()) return;
+        onTurn();
+      }}
+      onMouseEnter={() => setHot(true)}
+      onMouseLeave={() => setHot(false)}
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        [side]: 0,
+        width: "18%",
+        border: "none",
+        cursor: side === "right" ? "e-resize" : "w-resize",
+        background:
+          hot
+            ? `linear-gradient(to ${side}, rgba(255,220,160,0.07), transparent)`
+            : "transparent",
+        transition: "background 160ms",
+        zIndex: 2,
+      }}
+    />
   );
 }
 
@@ -246,10 +722,7 @@ function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* ---- Type ----
- * A single measure of about 66 characters, set in a serif at a comfortable
- * size, on warm paper. These are the numbers that decide whether a page is
- * pleasant to read for an hour, so they are here rather than scattered. */
+/* ---- Type ---- */
 
 const PAPER = "#f6efe2";
 const INK = "#231d15";
@@ -259,7 +732,7 @@ const shell: React.CSSProperties = {
   inset: 0,
   display: "flex",
   flexDirection: "column",
-  background: "#140d04",
+  background: "#100a03",
 };
 
 const bar: React.CSSProperties = {
@@ -293,7 +766,7 @@ const barSub: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 
-const linkButton: React.CSSProperties = {
+const pill: React.CSSProperties = {
   background: "none",
   border: "1px solid rgba(255,218,150,0.28)",
   borderRadius: 999,
@@ -302,6 +775,22 @@ const linkButton: React.CSSProperties = {
   fontFamily: "system-ui",
   fontSize: 12,
   padding: "6px 13px",
+  whiteSpace: "nowrap",
+};
+
+const toggleGroup: React.CSSProperties = {
+  display: "flex",
+  border: "1px solid rgba(255,218,150,0.28)",
+  borderRadius: 999,
+  overflow: "hidden",
+};
+
+const toggleButton: React.CSSProperties = {
+  border: "none",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 12,
+  padding: "6px 12px",
   whiteSpace: "nowrap",
 };
 
@@ -314,14 +803,14 @@ const progressTrack: React.CSSProperties = {
 const progressFill: React.CSSProperties = {
   height: "100%",
   background: "linear-gradient(90deg, rgba(255,190,90,0.7), rgba(255,225,170,0.95))",
-  transition: "width 140ms linear",
+  transition: "width 200ms ease-out",
 };
 
 const contents: React.CSSProperties = {
   position: "absolute",
   top: 58,
   right: 20,
-  zIndex: 4,
+  zIndex: 5,
   width: 300,
   maxHeight: "62vh",
   overflowY: "auto",
@@ -345,77 +834,38 @@ const contentsItem: React.CSSProperties = {
   textAlign: "left",
 };
 
-const scroller: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  // Sheets sit on a dark surface, the way pages sit on a desk.
-  background: "#100a03",
-};
-
-const stack: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 26,
-  padding: "34px 20px 120px",
-  color: INK,
-  fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
-  fontSize: 19,
-  lineHeight: 1.75,
-};
-
-/**
- * One page of the book.
- *
- * `minHeight` rather than a fixed height: the shape is what matters, but
- * reflowed text sets to a different depth than the original typesetting did, so
- * a sheet is allowed to run long instead of hiding the overflow.
- */
-const sheet: React.CSSProperties = {
+const desk: React.CSSProperties = {
   position: "relative",
-  width: "100%",
-  maxWidth: SHEET_WIDTH,
-  boxSizing: "border-box",
-  padding: `${SHEET_PADDING}px ${SHEET_PADDING}px ${SHEET_PADDING + 18}px`,
-  background: PAPER,
-  borderRadius: 3,
-  boxShadow: "0 14px 40px rgba(0,0,0,0.45), 0 2px 4px rgba(0,0,0,0.3)",
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   overflow: "hidden",
 };
 
-const titleSheet: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  textAlign: "center",
-};
-
-const bookTitle: React.CSSProperties = {
-  fontSize: 30,
-  lineHeight: 1.25,
-  margin: "0 0 6px",
-  fontWeight: 600,
-};
-
-const bookAuthor: React.CSSProperties = {
-  margin: "0 0 56px",
-  fontSize: 15,
-  fontStyle: "italic",
-  opacity: 0.62,
+const sheet: React.CSSProperties = {
+  position: "relative",
+  boxSizing: "border-box",
+  background: PAPER,
+  color: INK,
+  borderRadius: 3,
+  boxShadow: "0 18px 50px rgba(0,0,0,0.5), 0 2px 5px rgba(0,0,0,0.35)",
+  fontFamily: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
+  lineHeight: 1.72,
+  overflow: "hidden",
 };
 
 const chapterHeading: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: "0.8em",
   fontWeight: 600,
   letterSpacing: 1.6,
   textTransform: "uppercase",
-  margin: "58px 0 22px",
+  margin: "0 0 1.2em",
   opacity: 0.72,
 };
 
 const paragraph: React.CSSProperties = {
-  margin: "0 0 1.15em",
+  margin: "0 0 1.1em",
   textAlign: "justify",
   hyphens: "auto",
   // Contents pages carry dot leaders — runs of punctuation with no space in
@@ -425,22 +875,43 @@ const paragraph: React.CSSProperties = {
 
 const folio: React.CSSProperties = {
   position: "absolute",
-  bottom: 24,
+  bottom: 18,
   left: 0,
   right: 0,
   textAlign: "center",
   fontFamily: "system-ui",
   fontSize: 10.5,
-  opacity: 0.32,
+  opacity: 0.34,
   userSelect: "none",
 };
 
-const endMark: React.CSSProperties = {
-  marginTop: 70,
-  textAlign: "center",
+const footer: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 18,
+  padding: "10px 20px 16px",
+  zIndex: 3,
+};
+
+const definition: React.CSSProperties = {
+  position: "fixed",
+  zIndex: 60,
+  width: 280,
+  background: "rgba(24,16,6,0.98)",
+  border: "1px solid rgba(255,218,150,0.28)",
+  borderRadius: 10,
+  color: "#ffe8c0",
+  cursor: "pointer",
   fontFamily: "system-ui",
-  fontSize: 11,
-  letterSpacing: 2,
-  textTransform: "uppercase",
-  opacity: 0.4,
+  padding: "12px 14px",
+  boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+};
+
+const counter: React.CSSProperties = {
+  color: "rgba(255,220,160,0.6)",
+  fontFamily: "system-ui",
+  fontSize: 12,
+  minWidth: 110,
+  textAlign: "center",
 };
