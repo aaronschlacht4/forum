@@ -50,6 +50,7 @@ export default function CommentsPanel({
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState("");
   const [replyAnonymous, setReplyAnonymous] = useState(false);
+  const [focused, setFocused] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
 
   // A new draft should be ready to type into without reaching for the mouse.
@@ -97,27 +98,39 @@ export default function CommentsPanel({
         {draft && (
           <section style={draftCard}>
             <blockquote style={quote}>“{trim(draft.text, 220)}”</blockquote>
+
             <textarea
               ref={composer}
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => {
+                setBody(e.target.value);
+                // Grows with what is written, so a long note isn't typed
+                // through a four-line window.
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
                 if (e.key === "Escape") onDraftCancel();
               }}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               placeholder="Add a comment…"
-              rows={4}
-              style={input}
-            />
-            <div
+              rows={3}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                marginTop: 8,
-                flexWrap: "wrap",
+                ...input,
+                borderColor: focused
+                  ? "rgba(255,200,120,0.55)"
+                  : "rgba(255,218,150,0.24)",
               }}
-            >
+            />
+
+            {/* Captioned, because "Everyone / Only me" and "As me / Anonymous"
+                are two different questions and the pair of them side by side
+                gave no clue which was which. */}
+            <div style={choiceRow}>
+              <span style={choiceLabel}>Visible to</span>
               <Segmented
                 label="Who can see this"
                 options={[
@@ -127,22 +140,35 @@ export default function CommentsPanel({
                 value={visibility}
                 onChange={(v) => setVisibility(v as "public" | "private")}
               />
+            </div>
+
+            <div style={choiceRow}>
+              <span style={choiceLabel}>Post as</span>
               <Segmented
                 label="Whose name is on this"
                 options={[
-                  ["named", "As me"],
+                  ["named", "Me"],
                   ["anon", "Anonymous"],
                 ]}
                 value={anonymous ? "anon" : "named"}
                 onChange={(v) => setAnonymous(v === "anon")}
               />
-              <div style={{ flex: 1 }} />
+            </div>
+
+            <div style={actionRow}>
+              <span style={hint}>⌘↵ to post · esc to cancel</span>
               <button onClick={onDraftCancel} style={ghostButton}>Cancel</button>
-              <button onClick={submit} disabled={!body.trim()} style={primaryButton}>
+              <button
+                onClick={submit}
+                disabled={!body.trim()}
+                style={{
+                  ...primaryButton,
+                  ...(body.trim() ? null : disabledButton),
+                }}
+              >
                 Comment
               </button>
             </div>
-            <div style={hint}>⌘↵ to post</div>
           </section>
         )}
 
@@ -394,9 +420,10 @@ const input: React.CSSProperties = {
   fontFamily: "inherit",
   fontSize: 12.5,
   lineHeight: 1.5,
-  padding: "8px 9px",
-  resize: "vertical",
+  padding: "9px 10px",
+  resize: "none",
   outline: "none",
+  transition: "border-color 140ms",
 };
 
 /**
@@ -418,9 +445,38 @@ const segment: React.CSSProperties = {
   border: "none",
   cursor: "pointer",
   fontFamily: "inherit",
-  fontSize: 11.5,
-  padding: "5px 11px",
+  fontSize: 11,
+  padding: "4px 10px",
   whiteSpace: "nowrap",
+};
+
+/** A caption and its control on one line, so the pair reads as a question. */
+const choiceRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  marginTop: 9,
+};
+
+const choiceLabel: React.CSSProperties = {
+  width: 62,
+  flexShrink: 0,
+  color: "rgba(255,220,160,0.5)",
+  fontSize: 11,
+};
+
+const actionRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  marginTop: 14,
+};
+
+const disabledButton: React.CSSProperties = {
+  background: "rgba(255,228,192,0.08)",
+  border: "1px solid rgba(255,218,150,0.16)",
+  color: "rgba(255,228,192,0.35)",
+  cursor: "not-allowed",
 };
 
 const primaryButton: React.CSSProperties = {
@@ -560,10 +616,9 @@ const replyLink: React.CSSProperties = {
 };
 
 const hint: React.CSSProperties = {
-  marginTop: 6,
+  flex: 1,
   fontSize: 10.5,
-  color: "rgba(255,220,160,0.4)",
-  textAlign: "right",
+  color: "rgba(255,220,160,0.38)",
 };
 
 const empty: React.CSSProperties = {

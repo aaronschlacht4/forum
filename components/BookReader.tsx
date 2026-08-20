@@ -176,6 +176,8 @@ export default function BookReader({
   const [showContents, setShowContents] = useState(false);
   const [viewport, setViewport] = useState({ w: 1280, h: 800 });
   const [sheets, setSheets] = useState<Sheet[]>([]);
+  /** Which turn zone the pointer is over, so the cursor can say so. */
+  const [zone, setZone] = useState<"back" | "next" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -513,6 +515,19 @@ export default function BookReader({
     );
   }
 
+  const zoneCursor =
+    zone === "back" ? "w-resize" : zone === "next" ? "e-resize" : "default";
+
+  /** Which third of the reading area a point falls in. */
+  const zoneAt = (clientX: number): "back" | "next" | null => {
+    const rect = deskRef.current?.getBoundingClientRect();
+    if (!rect || panelOpen) return null;
+    const across = (clientX - rect.left) / rect.width;
+    if (across <= 1 / 3) return "back";
+    if (across >= 2 / 3) return "next";
+    return null;
+  };
+
   // Clamped rather than corrected in an effect, so a relayout can't leave the
   // view pointing past the end of the book for a frame.
   const first = Math.max(1, Math.min(leaf, Math.max(1, sheets.length)));
@@ -647,13 +662,25 @@ export default function BookReader({
       )}
 
       <div style={{ position: "relative", display: "flex", flex: 1, minHeight: 0 }}>
-      <div ref={deskRef} style={desk}>
+      <div
+        ref={deskRef}
+        style={{ ...desk, cursor: zoneCursor }}
+        onMouseMove={(e) => setZone(zoneAt(e.clientX))}
+        onMouseLeave={() => setZone(null)}
+        onClick={(e) => {
+          if (panelOpen) return; // the panel is where the pointer is headed
+          // A click that ended a selection was the reader marking a passage.
+          if (window.getSelection()?.toString()) return;
+          const el = e.target as HTMLElement | null;
+          if (el?.closest?.("[data-ui-panel], mark, button, a")) return;
+          const side = zoneAt(e.clientX);
+          if (side === "back") back();
+          if (side === "next") next();
+        }}
+      >
         {/* Clicking the outer thirds turns the page, so the book can be read
             without going hunting for a control. A click that finished a text
             selection is left alone. */}
-        <TurnZone side="left" disabled={atStart || panelOpen} onTurn={back} />
-        <TurnZone side="right" disabled={atEnd || panelOpen} onTurn={next} />
-
         <div
           style={{
             display: "flex",
@@ -827,47 +854,6 @@ function withMarks(
       </mark>
       {withMarks(text.slice(at + quote.length), marks, onOpen)}
     </>
-  );
-}
-
-/** A click strip down one edge of the desk. */
-function TurnZone({
-  side,
-  disabled,
-  onTurn,
-}: {
-  side: "left" | "right";
-  disabled: boolean;
-  onTurn: () => void;
-}) {
-  const [hot, setHot] = useState(false);
-  if (disabled) return null;
-  return (
-    <button
-      aria-label={side === "right" ? "Next page" : "Previous page"}
-      onClick={() => {
-        // Don't turn the page out from under someone who was selecting text.
-        if (window.getSelection()?.toString()) return;
-        onTurn();
-      }}
-      onMouseEnter={() => setHot(true)}
-      onMouseLeave={() => setHot(false)}
-      style={{
-        position: "absolute",
-        top: 0,
-        bottom: 0,
-        [side]: 0,
-        width: "18%",
-        border: "none",
-        cursor: side === "right" ? "e-resize" : "w-resize",
-        background:
-          hot
-            ? `linear-gradient(to ${side}, rgba(255,220,160,0.07), transparent)`
-            : "transparent",
-        transition: "background 160ms",
-        zIndex: 2,
-      }}
-    />
   );
 }
 
