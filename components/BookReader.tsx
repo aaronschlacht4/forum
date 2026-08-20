@@ -543,8 +543,8 @@ export default function BookReader({
           <svg
             aria-hidden
             width="18"
-            height="13"
-            viewBox="0 0 33 24"
+            height="12"
+            viewBox="0 0 36 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2.6"
