@@ -219,10 +219,7 @@ export default function BookReader({
   // its replies are opened from the marked passage itself.
   const [focused, setFocused] = useState<string | null>(null);
   const [replies, setReplies] = useState<{ [annotationId: string]: Reply[] }>({});
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [replyText, setReplyText] = useState("");
-  const [replyAnonymous, setReplyAnonymous] = useState(false);
   const [selection, setSelection] = useState<
     { text: string; page: number; x: number; y: number } | null
   >(null);
@@ -375,45 +372,10 @@ export default function BookReader({
     []
   );
 
-  const submitReply = useCallback(
-    async (annotationId: string) => {
-      const body = replyText.trim();
-      if (!body) return;
-      const saved = await saveReply(annotationId, body, replyAnonymous, replyingTo ?? undefined);
-      if (!saved) return setNotice("Sign in to reply.");
-      setReplies((all) => ({ ...all, [annotationId]: [...(all[annotationId] ?? []), saved] }));
-      setReplyText("");
-      setReplyingTo(null);
-    },
-    [replyText, replyAnonymous, replyingTo]
-  );
-
   const removeAnnotation = useCallback(async (annotationId: string) => {
     if (!(await deleteAnnotation(annotationId))) return setNotice("Couldn't delete that.");
     setAnnotations((all) => all.filter((a) => a.id !== annotationId));
     setFocused((cur) => (cur === annotationId ? null : cur));
-  }, []);
-
-  const removeReply = useCallback(async (replyId: string, annotationId: string) => {
-    if (!(await deleteReply(replyId))) return setNotice("Couldn't delete that reply.");
-    setReplies((all) => ({
-      ...all,
-      [annotationId]: (all[annotationId] ?? []).filter((r) => r.id !== replyId),
-    }));
-  }, []);
-
-  const vote = useCallback(async (replyId: string, value: 1 | -1 | null) => {
-    await voteOnReply(replyId, value);
-    const votes = await getVotesForReplies([replyId]);
-    setReplies((all) => {
-      const next: typeof all = {};
-      for (const [id, list] of Object.entries(all)) {
-        next[id] = list.map((r) =>
-          r.id === replyId ? { ...r, ...(votes.get(replyId) ?? {}) } : r
-        );
-      }
-      return next;
-    });
   }, []);
 
   /** Every highlighted phrase, longest first so a phrase wins over a word inside it. */
@@ -574,46 +536,67 @@ export default function BookReader({
                                  to   { opacity: 1; transform: none; } }
         @keyframes leafInLeft  { from { opacity: 0; transform: translateX(-58px); }
                                  to   { opacity: 1; transform: none; } }
+        .rdr-item:hover { background: rgba(255,228,192,0.07); color: #ffe8c0 !important; }
       `}</style>
 
       <header style={bar}>
-        <a href="/library" style={backLink} title="Back to the library">
-          <span aria-hidden>←</span> Library
+        <a href="/library" className="rdr-item" style={barItem} title="Back to the library">
+          <span aria-hidden style={{ opacity: 0.7 }}>←</span> Library
         </a>
 
-        <div style={{ textAlign: "center", minWidth: 0 }}>
-          <div style={barTitle}>{title}</div>
-          <div style={barSub}>
-            {[surname(author), meaningfulChapter(currentChapter, title)]
+        <span style={divider} />
+
+        <div style={titleBlock}>
+          <span style={barTitle}>{title}</span>
+          {(() => {
+            const line = [surname(author), meaningfulChapter(currentChapter, title)]
               .filter(Boolean)
-              .join(" · ")}
-          </div>
+              .join(" · ");
+            return line ? <span style={barSub}>{line}</span> : null;
+          })()}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
-          {viewport.w >= 900 && (
-            <div style={toggleGroup}>
+        <span style={{ flex: 1 }} />
+
+        {viewport.w >= 900 && (
+          <>
+            <div style={segmented} role="group" aria-label="Pages at a time">
               {([1, 2] as const).map((n) => (
                 <button
                   key={n}
                   onClick={() => setSpread(n)}
-                  title={n === 1 ? "One page" : "Two pages"}
                   style={{
-                    ...toggleButton,
-                    background: spread === n ? "rgba(255,200,120,0.22)" : "transparent",
-                    color: spread === n ? "#ffe8c0" : "rgba(255,228,192,0.6)",
+                    ...segment,
+                    background: spread === n ? "rgba(255,200,120,0.2)" : "transparent",
+                    color: spread === n ? "#ffe8c0" : "rgba(255,228,192,0.55)",
                   }}
                 >
-                  {n === 1 ? "1 page" : "2 pages"}
+                  {n}
                 </button>
               ))}
+              <span style={segmentLabel}>{spread === 1 ? "page" : "pages"}</span>
             </div>
-          )}
-          {text.chapters.length > 0 && (
-            <button onClick={() => setShowContents((v) => !v)} style={pill}>Contents</button>
-          )}
-          <button onClick={() => setPanelOpen((v) => !v)} style={pill}>Comments</button>
-        </div>
+            <span style={divider} />
+          </>
+        )}
+
+        {text.chapters.length > 0 && (
+          <button
+            className="rdr-item"
+            onClick={() => setShowContents((v) => !v)}
+            style={{ ...barItem, color: showContents ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
+          >
+            Contents
+          </button>
+        )}
+
+        <button
+          className="rdr-item"
+          onClick={() => setPanelOpen((v) => !v)}
+          style={{ ...barItem, color: panelOpen ? "#ffe8c0" : "rgba(255,228,192,0.72)" }}
+        >
+          Comments
+        </button>
       </header>
 
       <div style={progressTrack}>
@@ -912,21 +895,64 @@ const shell: React.CSSProperties = {
   background: "#100a03",
 };
 
+/**
+ * One rule across the top, with everything on it.
+ *
+ * Each control used to be its own outlined pill, so the bar read as a row of
+ * separate buttons that happened to be near each other. They share a surface
+ * now and are parted by hairlines, which is what makes it read as a single bar.
+ */
 const bar: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "1fr auto 1fr",
-  alignItems: "center",
-  gap: 16,
-  padding: "12px 20px",
-  background: "rgba(20,13,4,0.96)",
+  display: "flex",
+  alignItems: "stretch",
+  height: 46,
+  padding: "0 6px 0 8px",
+  background: "rgba(20,13,4,0.97)",
   borderBottom: "1px solid rgba(255,218,150,0.16)",
   zIndex: 3,
+};
+
+const barItem: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "0 13px",
+  background: "none",
+  border: "none",
+  borderRadius: 7,
+  color: "rgba(255,228,192,0.72)",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+  fontSize: 12.5,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  transition: "background 140ms, color 140ms",
+};
+
+const divider: React.CSSProperties = {
+  alignSelf: "center",
+  width: 1,
+  height: 20,
+  margin: "0 4px",
+  background: "rgba(255,218,150,0.16)",
+};
+
+/** Title and author read as one label, not two stacked lines of chrome. */
+const titleBlock: React.CSSProperties = {
+  // Baseline-aligns the title against the author, but centres the pair in the
+  // bar — without this the block stretches and rides up against the top edge.
+  alignSelf: "center",
+  display: "flex",
+  alignItems: "baseline",
+  gap: 9,
+  minWidth: 0,
+  padding: "0 10px",
 };
 
 const barTitle: React.CSSProperties = {
   color: "#ffe8c0",
   fontFamily: "system-ui",
-  fontSize: 14,
+  fontSize: 13.5,
   fontWeight: 600,
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -934,31 +960,40 @@ const barTitle: React.CSSProperties = {
 };
 
 const barSub: React.CSSProperties = {
-  color: "rgba(255,220,160,0.55)",
+  color: "rgba(255,220,160,0.5)",
   fontFamily: "system-ui",
-  fontSize: 11,
-  letterSpacing: 0.4,
+  fontSize: 11.5,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
 };
 
-/** Sized to its words, not to the column it sits in. */
-const backLink: React.CSSProperties = {
-  justifySelf: "start",
-  display: "inline-flex",
+const segmented: React.CSSProperties = {
+  alignSelf: "center",
+  display: "flex",
   alignItems: "center",
-  gap: 6,
-  background: "none",
-  border: "1px solid rgba(255,218,150,0.28)",
+  gap: 2,
+  padding: "3px 8px 3px 3px",
   borderRadius: 999,
-  color: "#ffe8c0",
+  background: "rgba(255,228,192,0.05)",
+};
+
+const segment: React.CSSProperties = {
+  minWidth: 22,
+  border: "none",
+  borderRadius: 999,
   cursor: "pointer",
   fontFamily: "system-ui",
   fontSize: 12,
-  padding: "6px 13px",
-  textDecoration: "none",
-  whiteSpace: "nowrap",
+  padding: "3px 0",
+  transition: "background 140ms, color 140ms",
+};
+
+const segmentLabel: React.CSSProperties = {
+  color: "rgba(255,228,192,0.5)",
+  fontFamily: "system-ui",
+  fontSize: 11.5,
+  marginLeft: 3,
 };
 
 const pill: React.CSSProperties = {
@@ -970,22 +1005,6 @@ const pill: React.CSSProperties = {
   fontFamily: "system-ui",
   fontSize: 12,
   padding: "6px 13px",
-  whiteSpace: "nowrap",
-};
-
-const toggleGroup: React.CSSProperties = {
-  display: "flex",
-  border: "1px solid rgba(255,218,150,0.28)",
-  borderRadius: 999,
-  overflow: "hidden",
-};
-
-const toggleButton: React.CSSProperties = {
-  border: "none",
-  cursor: "pointer",
-  fontFamily: "system-ui",
-  fontSize: 12,
-  padding: "6px 12px",
   whiteSpace: "nowrap",
 };
 
