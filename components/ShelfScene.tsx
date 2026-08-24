@@ -863,6 +863,11 @@ function LibraryScene({
         shadow-camera-bottom={-2}
         shadow-camera-near={0.5}
         shadow-camera-far={60}
+        // The shadow map's texels are ~0.02 world units across this frustum;
+        // without at least that much bias every book self-shadows per texel,
+        // quilting the spines with a diamond lattice.
+        shadow-bias={-0.0002}
+        shadow-normalBias={0.04}
       />
       <directionalLight position={[-8, 6, 12]} intensity={0.6} color="#ffc87a" />
       <directionalLight position={[ 8, 6, 12]} intensity={0.6} color="#ffc87a" />

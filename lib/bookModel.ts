@@ -347,6 +347,20 @@ function tintMaterial(source: THREE.Material, accent: THREE.Color): THREE.Materi
     const grain = pageGrain ?? lightenedPageTexture(mat.map);
     if (grain) mat.map = grain;
     mat.color?.copy(target);
+
+    // The rest of the maps still pointed at the model's own 4096-wide page
+    // photograph, and the page block samples barely a corner of that atlas — so
+    // a hugely magnified crop of it was being read as surface roughness and
+    // painting a regular lattice across the books. Swapping the colour map
+    // alone left that behind.
+    mat.normalMap = null;
+    mat.bumpMap = null;
+    mat.roughnessMap = null;
+    mat.metalnessMap = null;
+    mat.aoMap = null;
+    mat.emissiveMap = null;
+    mat.roughness = 0.8;
+    mat.metalness = 0;
   } else {
     // The binding is the strip you see from above, beside the page block. Its
     // baked map is a flat red swatch with nothing in it worth keeping, and it
