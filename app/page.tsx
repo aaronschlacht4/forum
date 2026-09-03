@@ -299,7 +299,13 @@ export default function HomePage() {
                       <div
                         style={{
                           aspectRatio: "2 / 3",
-                          background: cover ? `${BEIGE_RAISED} url(${cover}) center/cover no-repeat` : BEIGE_RAISED,
+                          // Each cover file is the full jacket unwrapped — back,
+                          // spine, then front, left to right — so a naive center
+                          // crop lands on the spine. The front cover is the
+                          // rightmost slice, so the crop anchors there instead.
+                          background: cover
+                            ? `${BEIGE_RAISED} url(${cover}) right center/cover no-repeat`
+                            : BEIGE_RAISED,
                         }}
                       />
                       <div style={{ padding: "10px 12px 14px" }}>
