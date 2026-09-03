@@ -128,9 +128,9 @@ function DiscussionCard({
       background: "rgba(255,255,255,0.82)",
       backdropFilter: "blur(12px)",
       borderRadius: 16,
-      border: "1px solid rgba(26,61,46,0.13)",
+      border: "1px solid rgba(36,23,3,0.13)",
       overflow: "hidden",
-      boxShadow: "0 4px 20px rgba(26,61,46,0.08)",
+      boxShadow: "0 4px 20px rgba(36,23,3,0.08)",
       display: "flex",
       flexDirection: "column",
       height: "100%",
@@ -138,11 +138,11 @@ function DiscussionCard({
       {/* Header — click to go to book */}
       <a href={bookUrl} style={{ textDecoration: "none" }}>
         <div
-          style={{ background: "#1a3d2e", padding: "12px 16px", cursor: "pointer", transition: "background 0.15s" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "#224d3a")}
-          onMouseLeave={e => (e.currentTarget.style.background = "#1a3d2e")}
+          style={{ background: "#241703", padding: "12px 16px", cursor: "pointer", transition: "background 0.15s" }}
+          onMouseEnter={e => (e.currentTarget.style.background = "#38250b")}
+          onMouseLeave={e => (e.currentTarget.style.background = "#241703")}
         >
-          <div style={{ color: "rgba(100,255,150,0.75)", fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 2 }}>
+          <div style={{ color: "rgba(255,228,192,0.75)", fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 2 }}>
             LIVE FROM THE VAULT
           </div>
           <div style={{ color: "#fff", fontFamily: "'Crimson Text', serif", fontSize: 16, lineHeight: 1.3 }}>
@@ -156,19 +156,19 @@ function DiscussionCard({
 
       {/* Annotation quote */}
       {(discussion.highlightedText || discussion.annotationComment) && (
-        <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid rgba(26,61,46,0.08)", background: "rgba(26,61,46,0.02)" }}>
+        <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid rgba(36,23,3,0.08)", background: "rgba(36,23,3,0.02)" }}>
           {discussion.highlightedText && (
             <blockquote style={{
               margin: 0, paddingLeft: 10,
-              borderLeft: "2px solid #1a3d2e",
-              color: "#2D5A3D", fontFamily: "'Crimson Text', serif",
+              borderLeft: "2px solid #241703",
+              color: "#5c4a33", fontFamily: "'Crimson Text', serif",
               fontStyle: "italic", fontSize: 13, lineHeight: 1.5,
             }}>
               &ldquo;{discussion.highlightedText.slice(0, 140)}{discussion.highlightedText.length > 140 ? "…" : ""}&rdquo;
             </blockquote>
           )}
           {discussion.annotationComment && (
-            <p style={{ margin: discussion.highlightedText ? "6px 0 0" : 0, color: "#1a3d2e", fontFamily: "'Crimson Text', serif", fontSize: 13, lineHeight: 1.4 }}>
+            <p style={{ margin: discussion.highlightedText ? "6px 0 0" : 0, color: "#241703", fontFamily: "'Crimson Text', serif", fontSize: 13, lineHeight: 1.4 }}>
               {discussion.annotationComment}
             </p>
           )}
@@ -189,13 +189,13 @@ function DiscussionCard({
             {discussion.replies.slice(0, 4).map((reply) => (
               <div key={reply.id} style={{
                 display: "flex", gap: 8, padding: "8px 10px",
-                borderRadius: 10, background: "rgba(26,61,46,0.03)",
-                border: "1px solid rgba(26,61,46,0.07)",
+                borderRadius: 10, background: "rgba(36,23,3,0.03)",
+                border: "1px solid rgba(36,23,3,0.07)",
               }}>
                 <Avatar displayName={reply.displayName} avatarUrl={reply.avatarUrl} size={24} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 }}>
-                    <span style={{ fontFamily: "'Crimson Text', serif", fontWeight: 600, fontSize: 13, color: "#1a3d2e" }}>
+                    <span style={{ fontFamily: "'Crimson Text', serif", fontWeight: 600, fontSize: 13, color: "#241703" }}>
                       {reply.displayName}
                     </span>
                     <span style={{ color: "#bbb", fontSize: 11, fontFamily: "'Crimson Text', serif" }}>
@@ -229,13 +229,13 @@ function DiscussionCard({
             style={{
               display: "block", textAlign: "center",
               padding: "7px 0", borderRadius: 8,
-              background: "rgba(26,61,46,0.07)",
-              border: "1px solid rgba(26,61,46,0.12)",
-              color: "#1a3d2e", fontFamily: "'Crimson Text', serif",
+              background: "rgba(36,23,3,0.07)",
+              border: "1px solid rgba(36,23,3,0.12)",
+              color: "#241703", fontFamily: "'Crimson Text', serif",
               fontSize: 13, textDecoration: "none", transition: "background 0.15s",
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = "rgba(26,61,46,0.12)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "rgba(26,61,46,0.07)")}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(36,23,3,0.12)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "rgba(36,23,3,0.07)")}
           >
             Join discussion →
           </a>
@@ -317,7 +317,7 @@ export default function LiveDiscussionDemo() {
     return (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
         {[0, 1, 2].map((i) => (
-          <div key={i} style={{ height: 320, borderRadius: 16, background: "rgba(255,255,255,0.4)", border: "1px solid rgba(26,61,46,0.1)" }} />
+          <div key={i} style={{ height: 320, borderRadius: 16, background: "rgba(255,255,255,0.4)", border: "1px solid rgba(36,23,3,0.1)" }} />
         ))}
       </div>
     );
@@ -346,9 +346,9 @@ export default function LiveDiscussionDemo() {
           disabled={pageIndex === 0}
           style={{
             width: 40, height: 40, borderRadius: "50%",
-            background: pageIndex === 0 ? "rgba(26,61,46,0.04)" : "rgba(26,61,46,0.1)",
-            border: "1px solid rgba(26,61,46,0.15)",
-            color: pageIndex === 0 ? "rgba(26,61,46,0.25)" : "#1a3d2e",
+            background: pageIndex === 0 ? "rgba(36,23,3,0.04)" : "rgba(36,23,3,0.1)",
+            border: "1px solid rgba(36,23,3,0.15)",
+            color: pageIndex === 0 ? "rgba(36,23,3,0.25)" : "#241703",
             fontSize: 18, cursor: pageIndex === 0 ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}
@@ -363,9 +363,9 @@ export default function LiveDiscussionDemo() {
           disabled={loadingMore}
           style={{
             width: 40, height: 40, borderRadius: "50%",
-            background: "rgba(26,61,46,0.1)",
-            border: "1px solid rgba(26,61,46,0.15)",
-            color: "#1a3d2e",
+            background: "rgba(36,23,3,0.1)",
+            border: "1px solid rgba(36,23,3,0.15)",
+            color: "#241703",
             fontSize: 18, cursor: loadingMore ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
             opacity: loadingMore ? 0.5 : 1,

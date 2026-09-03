@@ -1,54 +1,68 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import SpinningBook from "@/components/SpinningBook";
 import LiveDiscussionDemo from "@/components/LiveDiscussionDemo";
 import AuthModal from "@/components/AuthModal";
 import { useAuth } from "@/lib/AuthContext";
 
-// Category mapping for featured books
-const categoryMapping: Record<string, string> = {
-  "crime and punishment": "Psychological",
-  "deuteronomy": "Religious",
-  "atomic habits": "Self-Help",
-  "1984": "Dystopian",
-  "the art of war": "Strategy",
+/* ---- Palette: the reader's own colours, brought out front.
+   The page sits on the paper beige; the chrome (nav, footer) wears the
+   reading window's brown, with the same warm cream for its type. ---- */
+const BEIGE = "#f1efe3";
+const BEIGE_RAISED = "#e6e3d3"; // the pressed segment of a control
+const INK = "#3f3828"; // headings: the paper's ink warmed toward the chrome
+const MUTED = "#87816e"; // secondary type on beige
+const HAIRLINE = "rgba(35, 29, 21, 0.14)";
+const BROWN = "rgba(24, 16, 6, 0.98)"; // the reader's bar
+const CREAM = "#ffe8c0";
+const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
+
+const serif = { fontFamily: "'Crimson Text', serif" } as const;
+
+const navLink: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 500,
+  letterSpacing: "-0.01em",
+  color: CREAM_DIM,
+  padding: "8px 16px",
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  textDecoration: "none",
+};
+
+/* The segmented control from the reader's world: one rounded rail, a hairline
+   around it, the current choice sitting on a slightly deeper beige. */
+const segmentRail: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: 6,
+  borderRadius: 14,
+  border: `1px solid ${HAIRLINE}`,
+  background: "rgba(255, 255, 255, 0.25)",
+};
+
+const segment: React.CSSProperties = {
+  ...serif,
+  fontSize: 19,
+  fontWeight: 600,
+  color: MUTED,
+  padding: "8px 20px",
+  borderRadius: 9,
+  textDecoration: "none",
+  transition: "color 160ms ease, background 160ms ease",
+};
+
+const segmentActive: React.CSSProperties = {
+  ...segment,
+  color: INK,
+  background: BEIGE_RAISED,
 };
 
 export default function HomePage() {
-  const [books, setBooks] = useState<{ id: string; title?: string; cover_path?: string; pdfUrl?: string }[]>([]);
-  const [featuredBooks, setFeaturedBooks] = useState<{ id: string; title?: string; cover_path?: string; pdfUrl?: string }[]>([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const { user, signOut, loading } = useAuth();
-
-  useEffect(() => {
-    // Fetch all books
-    const fetchBooks = async () => {
-      try {
-        console.log("🔍 Fetching books from /api/books...");
-        const res = await fetch("/api/books");
-        console.log("📡 Response status:", res.status, res.ok);
-        
-        if (res.ok) {
-          const data = await res.json();
-          console.log("📚 Received data:", data);
-          const allBooks = Array.isArray(data) ? data : [];
-          console.log("📖 Total books:", allBooks.length);
-          setBooks(allBooks);
-
-          // Just take the first 5 books as featured (or use all books you have)
-          const featured = allBooks.slice(0, 5);
-          console.log("⭐ Featured books:", featured.length, featured);
-          setFeaturedBooks(featured);
-        } else {
-          console.error("❌ API response not OK:", res.status);
-        }
-      } catch (e) {
-        console.error("❌ Failed to fetch books:", e);
-      }
-    };
-    fetchBooks();
-  }, []);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -59,149 +73,73 @@ export default function HomePage() {
     return () => observer.disconnect();
   }, []);
 
-
-
-  // Get category for a book based on title
-  const getCategoryForBook = (book: { id: string; title?: string; cover_path?: string; pdfUrl?: string }): string => {
-    const title = book.title?.toLowerCase() || "";
-
-    // Try exact matches first
-    for (const [key, category] of Object.entries(categoryMapping)) {
-      if (title.includes(key)) {
-        return category;
-      }
-    }
-
-    // Otherwise assign categories based on common books
-    if (title.includes("nietzsche") || title.includes("beyond good")) return "Philosophy";
-    if (title.includes("frankenstein")) return "Gothic";
-    if (title.includes("meditations") || title.includes("aurelius")) return "Stoicism";
-    if (title.includes("plato") || title.includes("republic")) return "Philosophy";
-
-    return "Classic Literature";
-  };
-
   return (
-    <main className="min-h-screen" style={{
-      background: "linear-gradient(180deg, #E8F5E9 0%, #C8E6C9 15%, #E0F2F1 35%, #F1F8E9 100%)"
-    }}>
-      {/* Dark Green Toolbar with Inner Glow */}
+    <main className="min-h-screen" style={{ background: BEIGE }}>
+      <style>{`
+        .nav-item:hover { color: ${CREAM} !important; }
+        .seg-item:hover { color: ${INK}; background: rgba(230, 227, 211, 0.6); }
+      `}</style>
+
+      {/* The reading window's bar, worn as the site's nav */}
       <nav
-        className="fixed w-full z-50 flex items-center justify-between px-8"
+        className="fixed w-full z-50 flex items-center justify-between"
         style={{
-          top: "0",
-          background: "#1a3d2e",
-          boxShadow: "inset 0 0 20px rgba(100, 255, 150, 0.3), 0 2px 10px rgba(0, 0, 0, 0.1)",
+          top: 0,
+          background: BROWN,
           padding: "12px 32px",
-          borderBottom: "1px solid rgba(100, 255, 150, 0.2)"
+          borderBottom: "1px solid rgba(255, 228, 192, 0.12)",
         }}
       >
-        {/* Left Side - Logo */}
-        <div className="flex items-center">
-          <a
-            href="/"
-            className="flex items-center gap-2"
-          >
-            <div style={{
-              width: "32px",
-              height: "32px",
-              background: "rgba(100, 255, 150, 0.15)",
-              borderRadius: "8px",
+        <a href="/" className="flex items-center gap-2" style={{ textDecoration: "none" }}>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              background: "rgba(255, 228, 192, 0.12)",
+              borderRadius: 8,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#64FF96",
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
-              </svg>
-            </div>
-            <span style={{
-              color: "#ffffff",
-              fontWeight: 600,
-              fontSize: "16px",
-              letterSpacing: "-0.02em"
-            }}>
-              FORUM
-            </span>
-          </a>
-        </div>
+              color: CREAM,
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z" />
+            </svg>
+          </div>
+          <span style={{ color: CREAM, fontWeight: 600, fontSize: 16, letterSpacing: "-0.02em" }}>
+            FORUM
+          </span>
+        </a>
 
-        {/* Center - Navigation Links */}
         <div className="flex items-center gap-1">
-          <a
-            href="/"
-            className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-            style={{
-              fontSize: "14px",
-              fontWeight: 500,
-              letterSpacing: "-0.01em"
-            }}
-          >
-            Product
-          </a>
-          <a
-            href="/library"
-            className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-            style={{
-              fontSize: "14px",
-              fontWeight: 500,
-              letterSpacing: "-0.01em"
-            }}
-          >
-            Library
-          </a>
-          <a
-            href="#pricing"
-            className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-            style={{
-              fontSize: "14px",
-              fontWeight: 500,
-              letterSpacing: "-0.01em"
-            }}
-          >
-            Pricing
-          </a>
-          <button
-            className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-            style={{
-              fontSize: "14px",
-              fontWeight: 500,
-              letterSpacing: "-0.01em"
-            }}
-            onClick={() => {/* TODO: Add contact */}}
-          >
+          <a href="/" className="nav-item" style={navLink}>Product</a>
+          <a href="/library" className="nav-item" style={navLink}>Library</a>
+          <a href="#pricing" className="nav-item" style={navLink}>Pricing</a>
+          <button className="nav-item" style={navLink} onClick={() => {/* TODO: Add contact */}}>
             Contact us
           </button>
         </div>
 
-        {/* Right Side - Auth Section */}
         <div className="flex items-center gap-3">
-          {!loading && (
-            user ? (
+          {!loading &&
+            (user ? (
               <>
-                <a
-                  href="/profile"
-                  className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-                  style={{
-                    fontSize: "14px",
-                    fontWeight: 500
-                  }}
-                >
-                  {user.email?.split('@')[0]}
+                <a href="/profile" className="nav-item" style={navLink}>
+                  {user.email?.split("@")[0]}
                 </a>
                 <button
                   onClick={() => signOut()}
-                  className="transition-all duration-200 hover:scale-105"
                   style={{
-                    fontSize: "14px",
+                    fontSize: 14,
                     padding: "8px 20px",
-                    borderRadius: "8px",
-                    background: "rgba(255, 255, 255, 0.15)",
-                    color: "white",
-                    border: "1px solid rgba(255, 255, 255, 0.2)",
+                    borderRadius: 8,
+                    background: "rgba(255, 228, 192, 0.12)",
+                    color: CREAM,
+                    border: "1px solid rgba(255, 228, 192, 0.2)",
                     fontWeight: 500,
-                    letterSpacing: "-0.01em"
+                    letterSpacing: "-0.01em",
+                    cursor: "pointer",
                   }}
                 >
                   Sign Out
@@ -209,145 +147,91 @@ export default function HomePage() {
               </>
             ) : (
               <>
-                <button
-                  onClick={() => setShowAuthModal(true)}
-                  className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
-                  style={{
-                    fontSize: "14px",
-                    fontWeight: 500,
-                    letterSpacing: "-0.01em"
-                  }}
-                >
+                <button className="nav-item" style={navLink} onClick={() => setShowAuthModal(true)}>
                   Log in
                 </button>
                 <button
                   onClick={() => setShowAuthModal(true)}
-                  className="transition-all duration-200 hover:scale-105"
                   style={{
-                    fontSize: "14px",
+                    fontSize: 14,
                     padding: "8px 20px",
-                    borderRadius: "8px",
-                    background: "rgba(255, 255, 255, 0.95)",
-                    color: "#1a3d2e",
+                    borderRadius: 8,
+                    background: CREAM,
+                    color: "#241703",
                     border: "none",
                     fontWeight: 600,
-                    letterSpacing: "-0.01em"
+                    letterSpacing: "-0.01em",
+                    cursor: "pointer",
                   }}
                 >
                   Sign up
                 </button>
               </>
-            )
-          )}
+            ))}
         </div>
       </nav>
 
-      {/* Auth Modal */}
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
 
-      {/* Hero Section */}
-      <section className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-8 py-20">
-        <div className="relative z-10 text-center">
-          {/* Request Book Banner */}
-          <a
-            href="/request-book"
-            className="inline-flex items-center gap-2 mb-8 px-4 py-2 rounded-full transition-all duration-200 hover:scale-105"
-            style={{
-              background: "rgba(255, 255, 255, 0.5)",
-              backdropFilter: "blur(10px)",
-              border: "1px solid rgba(26, 61, 46, 0.2)",
-              textDecoration: "none"
-            }}
-          >
-            <span style={{
-              fontSize: "13px",
-              color: "#1a3d2e",
-              fontWeight: 600,
-              letterSpacing: "-0.01em"
-            }}>
-              Request a new book →
-            </span>
-          </a>
-
+      {/* Hero: type on paper, nothing floating */}
+      <section className="relative flex min-h-screen flex-col items-center justify-center px-8 py-20">
+        <div className="reveal text-center" style={{ maxWidth: 760 }}>
           <h1
-            className="reveal mb-8 text-8xl font-bold tracking-tight sm:text-9xl"
-            style={{
-              fontFamily: "'Crimson Text', serif",
-              fontWeight: 400,
-              color: "#1a3d2e",
-              textShadow: "0 0 40px rgba(26, 61, 46, 0.4), 0 0 20px rgba(26, 61, 46, 0.3), 2px 2px 4px rgba(0,0,0,0.2)"
-            }}
+            className="text-7xl sm:text-8xl"
+            style={{ ...serif, fontWeight: 600, color: INK, letterSpacing: "-0.01em", margin: 0 }}
           >
             The Modern Salon.
           </h1>
-        </div>
 
-        {/* Spinning Books Carousel */}
-        <div className="reveal reveal-delay-2 relative z-10 mb-20 grid grid-cols-2 gap-8 sm:grid-cols-3 lg:grid-cols-5">
-          {featuredBooks.length > 0 ? (
-            featuredBooks.map((book, index) => (
-              <SpinningBook
-                key={book.id}
-                id={book.id}
-                title={book.title || "Untitled"}
-                category={getCategoryForBook(book)}
-                cover_path={book.cover_path}
-                pdfUrl={book.pdfUrl}
-                index={index}
-                onClick={() => {
-                  window.location.href = `/book/${book.id}`;
-                }}
-              />
-            ))
-          ) : (
-            <div className="col-span-full text-center" style={{ fontFamily: "'Crimson Text', serif" }}>
-              Loading books...
-            </div>
-          )}
-        </div>
+          <p style={{ ...serif, fontSize: 21, color: MUTED, marginTop: 20 }}>
+            A library read together — margins, arguments and all.
+          </p>
 
-        {/* Scroll indicator */}
-        <div className="relative z-10 animate-bounce">
-          <svg
-            className="h-6 w-6 text-gray-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 14l-7 7m0 0l-7-7m7 7V3"
-            />
-          </svg>
+          <hr
+            style={{
+              border: "none",
+              borderTop: `1px solid ${HAIRLINE}`,
+              margin: "44px auto 40px",
+              width: "72%",
+            }}
+          />
+
+          <div style={segmentRail}>
+            <a href="/library" className="seg-item" style={segmentActive}>
+              Library
+            </a>
+            <a href="#discussions" className="seg-item" style={segment}>
+              Discussions
+            </a>
+            <a href="/request-book" className="seg-item" style={segment}>
+              Request a book
+            </a>
+          </div>
         </div>
       </section>
 
-      {/* Live Discussion Section */}
-      <section className="px-8 py-20">
+      {/* Live Discussions */}
+      <section id="discussions" className="px-8 py-20">
         <div className="mx-auto max-w-6xl">
           <div className="reveal mb-12 text-center">
             <h2
-              className="mb-4 text-5xl font-bold tracking-tight"
-              style={{
-                fontFamily: "'Crimson Text', serif",
-                fontWeight: 400,
-                color: "#000000",
-                textShadow: "1px 1px 2px rgba(0,0,0,0.2)"
-              }}
+              className="text-5xl"
+              style={{ ...serif, fontWeight: 600, color: INK, letterSpacing: "-0.01em", margin: 0 }}
             >
               Live Discussions
             </h2>
-            <p
-              className="text-lg"
-              style={{
-                fontFamily: "'Crimson Text', serif",
-                color: "#2D2D2D"
-              }}
-            >
+            <p style={{ ...serif, fontSize: 18, color: MUTED, marginTop: 12 }}>
               Real conversations happening right now in the vault
             </p>
+            <hr
+              style={{
+                border: "none",
+                borderTop: `1px solid ${HAIRLINE}`,
+                margin: "36px auto 0",
+                width: 420,
+                maxWidth: "80%",
+              }}
+            />
           </div>
 
           <div className="reveal reveal-delay-1">
@@ -356,31 +240,17 @@ export default function HomePage() {
         </div>
       </section>
 
-
-      {/* Footer */}
-      <footer className="px-8 py-12" style={{ backgroundColor: "#3D3D3D", color: "#FFFFFF" }}>
+      {/* Footer in the same brown as the nav */}
+      <footer className="px-8 py-12" style={{ background: BROWN, color: CREAM }}>
         <div className="mx-auto max-w-6xl text-center">
-          <h3
-            className="mb-4 text-2xl font-bold"
-            style={{
-              fontFamily: "'Crimson Text', serif",
-              fontWeight: 400
-            }}
-          >
+          <h3 className="mb-3 text-2xl" style={{ ...serif, fontWeight: 600 }}>
             The Modern Salon
           </h3>
-          <p
-            style={{
-              fontFamily: "'Crimson Text', serif",
-              color: "#CCCCCC"
-            }}
-          >
+          <p style={{ ...serif, color: CREAM_DIM }}>
             A space for intellectual curiosity and meaningful discourse
           </p>
         </div>
       </footer>
-
-      {/* Removed float animation - books stay still */}
     </main>
   );
 }
