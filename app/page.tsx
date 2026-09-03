@@ -64,15 +64,15 @@ const segment: React.CSSProperties = {
 const libraryButton: React.CSSProperties = {
   ...serif,
   display: "inline-block",
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 600,
-  color: "#241703",
-  background: CREAM,
-  padding: "18px 52px",
-  borderRadius: 16,
+  color: CREAM,
+  background: BROWN,
+  padding: "17px 48px",
+  borderRadius: 13,
   textDecoration: "none",
   letterSpacing: "-0.01em",
-  boxShadow: "0 10px 30px rgba(36,23,3,0.22)",
+  boxShadow: "0 8px 22px rgba(36,23,3,0.18)",
   transition: "transform 160ms ease, box-shadow 160ms ease",
 };
 
