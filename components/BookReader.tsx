@@ -516,8 +516,11 @@ export default function BookReader({
     );
   }
 
+  // Everywhere that isn't a live turn corner is reading, not turning, so it
+  // gets the ordinary text cursor — the same signal a plain text editor
+  // gives — rather than an arrow that suggests nothing here can be selected.
   const zoneCursor =
-    zone === "back" ? "w-resize" : zone === "next" ? "e-resize" : "default";
+    zone === "back" ? "w-resize" : zone === "next" ? "e-resize" : "text";
 
   /**
    * Which turn a point asks for, the way a real book would take it.
