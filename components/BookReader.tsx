@@ -520,21 +520,35 @@ export default function BookReader({
     zone === "back" ? "w-resize" : zone === "next" ? "e-resize" : "default";
 
   /**
-   * Which third of the paper a point falls in.
+   * Which turn a point asks for, the way a real book would take it.
    *
-   * Measured against the spread rather than the whole desk: on one page a
-   * single sheet sits centred in a much wider desk, so a third of the *desk*
-   * left most of the page in the dead middle and clicking it did nothing.
-   * Anything out in the margins beyond the paper turns the way it points.
+   * Only the outward-facing edge of each page turns: the left third of the
+   * leftmost page goes back, the right third of the rightmost page goes on.
+   * With two pages open, the edges facing the gutter do nothing — a click
+   * near the middle of the spread is reading, not turning. Each page is
+   * sheetW wide with a GUTTER between them, so the layout is walked
+   * directly rather than re-measuring every leaf. Anything out in the
+   * margins beyond the paper turns the way it points.
    */
   const zoneAt = (clientX: number): "back" | "next" | null => {
     const rect = spreadRef.current?.getBoundingClientRect();
     if (!rect || !rect.width || panelOpen) return null;
     if (clientX < rect.left) return "back";
     if (clientX > rect.right) return "next";
-    const across = (clientX - rect.left) / rect.width;
-    if (across <= 1 / 3) return "back";
-    if (across >= 2 / 3) return "next";
+    const x = clientX - rect.left;
+    for (let i = 0; i < columns; i++) {
+      const pageStart = i * (sheetW + GUTTER);
+      const pageEnd = pageStart + sheetW;
+      const first = i === 0;
+      const last = i === columns - 1;
+      if (x < pageStart) return null; // in the gutter between pages
+      if (x <= pageEnd || last) {
+        const across = (x - pageStart) / sheetW;
+        if (first && across <= 1 / 3) return "back";
+        if (last && across >= 2 / 3) return "next";
+        return null;
+      }
+    }
     return null;
   };
 
