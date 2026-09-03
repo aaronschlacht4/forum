@@ -299,15 +299,29 @@ export default function HomePage() {
                       <div
                         style={{
                           aspectRatio: "2 / 3",
-                          // Each cover file is the full jacket unwrapped — back,
-                          // spine, then front, left to right — so a naive center
-                          // crop lands on the spine. The front cover is the
-                          // rightmost slice, so the crop anchors there instead.
-                          background: cover
-                            ? `${BEIGE_RAISED} url(${cover}) right center/cover no-repeat`
-                            : BEIGE_RAISED,
+                          overflow: "hidden",
+                          background: BEIGE_RAISED,
                         }}
-                      />
+                      >
+                        {cover && (
+                          <div
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              // Each cover file is the full jacket unwrapped —
+                              // back cover 45%, spine 10%, front cover 45%,
+                              // left to right. `cover`-fit crops by whatever
+                              // fraction the box's own shape happens to
+                              // demand, which for these files runs past the
+                              // 45% mark and pulls the spine into view. Fixing
+                              // the horizontal scale to 100/45% instead always
+                              // shows exactly the rightmost 45%, regardless of
+                              // the source image's real proportions.
+                              background: `url(${cover}) right center / 222.222% auto no-repeat`,
+                            }}
+                          />
+                        )}
+                      </div>
                       <div style={{ padding: "10px 12px 14px" }}>
                         <div
                           style={{
