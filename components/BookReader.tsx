@@ -525,8 +525,8 @@ export default function BookReader({
   /**
    * Which turn a point asks for, the way a real book would take it.
    *
-   * Only the outward-facing edge of each page turns: the left third of the
-   * leftmost page goes back, the right third of the rightmost page goes on.
+   * Only the outward-facing edge of each page turns: the left sixth of the
+   * leftmost page goes back, the right sixth of the rightmost page goes on.
    * With two pages open, the edges facing the gutter do nothing — a click
    * near the middle of the spread is reading, not turning. Each page is
    * sheetW wide with a GUTTER between them, so the layout is walked
@@ -547,8 +547,8 @@ export default function BookReader({
       if (x < pageStart) return null; // in the gutter between pages
       if (x <= pageEnd || last) {
         const across = (x - pageStart) / sheetW;
-        if (first && across <= 1 / 3) return "back";
-        if (last && across >= 2 / 3) return "next";
+        if (first && across <= 1 / 6) return "back";
+        if (last && across >= 5 / 6) return "next";
         return null;
       }
     }
@@ -705,7 +705,7 @@ export default function BookReader({
           if (side === "next") next();
         }}
       >
-        {/* Clicking the outer thirds turns the page, so the book can be read
+        {/* Clicking the outer sixths turns the page, so the book can be read
             without going hunting for a control. A click that finished a text
             selection is left alone. */}
         <div
