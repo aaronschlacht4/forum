@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import LiveDiscussionDemo from "@/components/LiveDiscussionDemo";
 import AuthModal from "@/components/AuthModal";
 import { useAuth } from "@/lib/AuthContext";
+import { coverUrlFor } from "@/lib/bookModel";
 
 /* ---- Palette: the reader's own colours, brought out front.
    The page sits on the paper beige; the chrome (nav, footer) wears the
@@ -19,6 +20,8 @@ const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
 
 const serif = { fontFamily: "'Crimson Text', serif" } as const;
 
+type Book = { id: string; title?: string; author?: string; cover_path?: string };
+
 const navLink: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 500,
@@ -32,7 +35,8 @@ const navLink: React.CSSProperties = {
 };
 
 /* The segmented control from the reader's world: one rounded rail, a hairline
-   around it, the current choice sitting on a slightly deeper beige. */
+   around it, the current choice sitting on a slightly deeper beige. Purely a
+   set of anchors down the page now, so nothing in it is ever "active". */
 const segmentRail: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -54,15 +58,55 @@ const segment: React.CSSProperties = {
   transition: "color 160ms ease, background 160ms ease",
 };
 
-const segmentActive: React.CSSProperties = {
-  ...segment,
-  color: INK,
-  background: BEIGE_RAISED,
+/* The one button on the page that outranks everything else in it — the
+   library is where the app actually happens, so its door is the biggest
+   thing in the hero. */
+const libraryButton: React.CSSProperties = {
+  ...serif,
+  display: "inline-block",
+  fontSize: 24,
+  fontWeight: 600,
+  color: "#241703",
+  background: CREAM,
+  padding: "18px 52px",
+  borderRadius: 16,
+  textDecoration: "none",
+  letterSpacing: "-0.01em",
+  boxShadow: "0 10px 30px rgba(36,23,3,0.22)",
+  transition: "transform 160ms ease, box-shadow 160ms ease",
 };
+
+function sectionHeading(title: string, subtitle: string) {
+  return (
+    <div className="reveal mb-12 text-center">
+      <h2 className="text-5xl" style={{ ...serif, fontWeight: 600, color: INK, letterSpacing: "-0.01em", margin: 0 }}>
+        {title}
+      </h2>
+      <p style={{ ...serif, fontSize: 18, color: MUTED, marginTop: 12 }}>{subtitle}</p>
+      <hr
+        style={{
+          border: "none",
+          borderTop: `1px solid ${HAIRLINE}`,
+          margin: "36px auto 0",
+          width: 420,
+          maxWidth: "80%",
+        }}
+      />
+    </div>
+  );
+}
 
 export default function HomePage() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const { user, signOut, loading } = useAuth();
+  const [books, setBooks] = useState<Book[]>([]);
+
+  useEffect(() => {
+    fetch("/api/books")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setBooks(Array.isArray(data) ? data.slice(0, 6) : []))
+      .catch(() => setBooks([]));
+  }, []);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -78,6 +122,8 @@ export default function HomePage() {
       <style>{`
         .nav-item:hover { color: ${CREAM} !important; }
         .seg-item:hover { color: ${INK}; background: rgba(230, 227, 211, 0.6); }
+        .library-cta:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(36,23,3,0.28); }
+        .book-card:hover { transform: translateY(-3px); border-color: rgba(35,29,21,0.28); }
       `}</style>
 
       {/* The reading window's bar, worn as the site's nav */}
@@ -187,6 +233,11 @@ export default function HomePage() {
             A library read together — margins, arguments and all.
           </p>
 
+          {/* The one door into the actual app, sized to say so */}
+          <a href="/library" className="library-cta" style={{ ...libraryButton, marginTop: 40 }}>
+            Enter the Library →
+          </a>
+
           <hr
             style={{
               border: "none",
@@ -197,46 +248,121 @@ export default function HomePage() {
           />
 
           <div style={segmentRail}>
-            <a href="/library" className="seg-item" style={segmentActive}>
-              Library
-            </a>
             <a href="#discussions" className="seg-item" style={segment}>
               Discussions
             </a>
-            <a href="/request-book" className="seg-item" style={segment}>
-              Request a book
+            <a href="#top-books" className="seg-item" style={segment}>
+              Top Books
+            </a>
+            <a href="#request" className="seg-item" style={segment}>
+              Request a Book
             </a>
           </div>
         </div>
       </section>
 
-      {/* Live Discussions */}
+      {/* Discussions */}
       <section id="discussions" className="px-8 py-20">
         <div className="mx-auto max-w-6xl">
-          <div className="reveal mb-12 text-center">
-            <h2
-              className="text-5xl"
-              style={{ ...serif, fontWeight: 600, color: INK, letterSpacing: "-0.01em", margin: 0 }}
-            >
-              Live Discussions
-            </h2>
-            <p style={{ ...serif, fontSize: 18, color: MUTED, marginTop: 12 }}>
-              Real conversations happening right now in the vault
-            </p>
-            <hr
-              style={{
-                border: "none",
-                borderTop: `1px solid ${HAIRLINE}`,
-                margin: "36px auto 0",
-                width: 420,
-                maxWidth: "80%",
-              }}
-            />
-          </div>
-
+          {sectionHeading("Discussions", "Real conversations happening right now in the vault")}
           <div className="reveal reveal-delay-1">
             <LiveDiscussionDemo />
           </div>
+        </div>
+      </section>
+
+      {/* Top Books Being Read */}
+      <section id="top-books" className="px-8 py-20">
+        <div className="mx-auto max-w-6xl">
+          {sectionHeading("Top Books Being Read", "Where the shelf is busiest this week")}
+
+          <div className="reveal reveal-delay-1 grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-6">
+            {books.length > 0
+              ? books.map((book) => {
+                  const cover = coverUrlFor(book);
+                  return (
+                    <a
+                      key={book.id}
+                      href={`/book/${book.id}`}
+                      className="book-card"
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        textDecoration: "none",
+                        borderRadius: 12,
+                        border: `1px solid ${HAIRLINE}`,
+                        background: "rgba(255,255,255,0.4)",
+                        overflow: "hidden",
+                        transition: "transform 160ms ease, border-color 160ms ease",
+                      }}
+                    >
+                      <div
+                        style={{
+                          aspectRatio: "2 / 3",
+                          background: cover ? `${BEIGE_RAISED} url(${cover}) center/cover no-repeat` : BEIGE_RAISED,
+                        }}
+                      />
+                      <div style={{ padding: "10px 12px 14px" }}>
+                        <div
+                          style={{
+                            ...serif,
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: INK,
+                            lineHeight: 1.3,
+                            overflow: "hidden",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                          }}
+                        >
+                          {book.title || "Untitled"}
+                        </div>
+                        {book.author && (
+                          <div style={{ ...serif, fontSize: 12, color: MUTED, marginTop: 3 }}>
+                            {book.author}
+                          </div>
+                        )}
+                      </div>
+                    </a>
+                  );
+                })
+              : (
+                <div className="col-span-full text-center" style={{ ...serif, color: MUTED, padding: "24px 0" }}>
+                  Loading the shelf…
+                </div>
+              )}
+          </div>
+        </div>
+      </section>
+
+      {/* Request a Book */}
+      <section id="request" className="px-8 py-20">
+        <div className="mx-auto max-w-2xl text-center reveal">
+          <h2 className="text-5xl" style={{ ...serif, fontWeight: 600, color: INK, letterSpacing: "-0.01em", margin: 0 }}>
+            Request a Book
+          </h2>
+          <p style={{ ...serif, fontSize: 18, color: MUTED, marginTop: 12 }}>
+            Can&rsquo;t find a book you&rsquo;re looking for? Tell us and we&rsquo;ll add it to the shelf.
+          </p>
+          <a
+            href="/request-book"
+            style={{
+              ...serif,
+              display: "inline-block",
+              marginTop: 32,
+              fontSize: 17,
+              fontWeight: 600,
+              color: CREAM,
+              background: BROWN,
+              padding: "14px 36px",
+              borderRadius: 12,
+              textDecoration: "none",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Request a book →
+          </a>
         </div>
       </section>
 

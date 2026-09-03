@@ -3,6 +3,16 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/AuthContext";
 
+/* Same palette as the landing page and the reader itself. */
+const BEIGE = "#f1efe3";
+const INK = "#3f3828";
+const MUTED = "#87816e";
+const HAIRLINE = "rgba(35, 29, 21, 0.14)";
+const BROWN = "rgba(24, 16, 6, 0.98)";
+const CREAM = "#ffe8c0";
+const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
+const serif = { fontFamily: "'Crimson Text', serif" } as const;
+
 export default function RequestBookPage() {
   const { user } = useAuth();
   const [title, setTitle] = useState("");
@@ -28,61 +38,48 @@ export default function RequestBookPage() {
   };
 
   return (
-    <main
-      className="min-h-screen"
-      style={{
-        background: "linear-gradient(180deg, #E8F5E9 0%, #C8E6C9 15%, #E0F2F1 35%, #F1F8E9 100%)",
-      }}
-    >
-      {/* Dark Green Toolbar */}
+    <main className="min-h-screen" style={{ background: BEIGE }}>
+      {/* Same brown bar as the rest of the site */}
       <nav
-        className="fixed w-full z-50 flex items-center justify-between px-8"
+        className="fixed w-full z-50 flex items-center justify-between"
         style={{
-          top: "0",
-          background: "#1a3d2e",
-          boxShadow: "inset 0 0 20px rgba(100, 255, 150, 0.3), 0 2px 10px rgba(0, 0, 0, 0.1)",
+          top: 0,
+          background: BROWN,
           padding: "12px 32px",
-          borderBottom: "1px solid rgba(100, 255, 150, 0.2)",
+          borderBottom: "1px solid rgba(255, 228, 192, 0.12)",
         }}
       >
-        <div className="flex items-center">
-          <a href="/" className="flex items-center gap-2">
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                background: "rgba(100, 255, 150, 0.15)",
-                borderRadius: "8px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#64FF96",
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
-              </svg>
-            </div>
-            <span
-              style={{
-                color: "#ffffff",
-                fontWeight: 600,
-                fontSize: "16px",
-                letterSpacing: "-0.02em",
-              }}
-            >
-              FORUM
-            </span>
-          </a>
-        </div>
+        <a href="/" className="flex items-center gap-2" style={{ textDecoration: "none" }}>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              background: "rgba(255, 228, 192, 0.12)",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: CREAM,
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z" />
+            </svg>
+          </div>
+          <span style={{ color: CREAM, fontWeight: 600, fontSize: 16, letterSpacing: "-0.02em" }}>
+            FORUM
+          </span>
+        </a>
 
         <a
           href="/"
-          className="px-4 py-2 text-white hover:text-green-200 transition-all duration-200"
           style={{
-            fontSize: "14px",
+            fontSize: 14,
             fontWeight: 500,
             letterSpacing: "-0.01em",
+            color: CREAM_DIM,
+            textDecoration: "none",
+            padding: "8px 16px",
           }}
         >
           ← Back to Home
@@ -94,44 +91,31 @@ export default function RequestBookPage() {
         <div
           className="w-full max-w-2xl p-8"
           style={{
-            background: "rgba(255, 255, 255, 0.8)",
-            backdropFilter: "blur(20px)",
-            borderRadius: "24px",
-            border: "1px solid rgba(255, 255, 255, 0.5)",
-            boxShadow: "0 20px 60px rgba(0, 0, 0, 0.1)",
+            background: "rgba(255, 255, 255, 0.5)",
+            borderRadius: 20,
+            border: `1px solid ${HAIRLINE}`,
+            boxShadow: "0 20px 60px rgba(36, 23, 3, 0.1)",
           }}
         >
           <h1
-            className="mb-4 text-5xl font-bold"
-            style={{
-              fontFamily: "'Crimson Text', serif",
-              fontWeight: 400,
-              color: "#1a3d2e",
-              textAlign: "center",
-            }}
+            className="mb-4 text-5xl"
+            style={{ ...serif, fontWeight: 600, color: INK, textAlign: "center" }}
           >
             Request a New Book
           </h1>
-          <p
-            className="mb-8 text-center"
-            style={{
-              fontFamily: "'Crimson Text', serif",
-              color: "#4a4a4a",
-              fontSize: "18px",
-            }}
-          >
-            Can't find a book you're looking for? Let us know and we'll add it to our collection.
+          <p className="mb-8 text-center" style={{ ...serif, color: MUTED, fontSize: 18 }}>
+            Can&rsquo;t find a book you&rsquo;re looking for? Let us know and we&rsquo;ll add it to our collection.
           </p>
 
           {!user && (
             <div
               className="mb-6 p-4 rounded-lg text-center"
               style={{
-                background: "rgba(26, 61, 46, 0.1)",
-                border: "1px solid rgba(26, 61, 46, 0.2)",
+                background: "rgba(36, 23, 3, 0.06)",
+                border: `1px solid ${HAIRLINE}`,
               }}
             >
-              <p style={{ color: "#1a3d2e", fontSize: "14px" }}>
+              <p style={{ ...serif, color: INK, fontSize: 14 }}>
                 Please <a href="/" style={{ fontWeight: 600, textDecoration: "underline" }}>log in</a> to submit a book request.
               </p>
             </div>
@@ -143,11 +127,11 @@ export default function RequestBookPage() {
                 htmlFor="title"
                 style={{
                   display: "block",
-                  marginBottom: "8px",
-                  fontFamily: "'Crimson Text', serif",
-                  fontSize: "16px",
+                  marginBottom: 8,
+                  ...serif,
+                  fontSize: 16,
                   fontWeight: 600,
-                  color: "#1a3d2e",
+                  color: INK,
                 }}
               >
                 Book Title
@@ -163,20 +147,21 @@ export default function RequestBookPage() {
                 style={{
                   width: "100%",
                   padding: "12px 16px",
-                  fontSize: "16px",
-                  fontFamily: "'Crimson Text', serif",
-                  borderRadius: "12px",
-                  border: "1px solid rgba(26, 61, 46, 0.3)",
+                  fontSize: 16,
+                  ...serif,
+                  borderRadius: 12,
+                  border: `1px solid ${HAIRLINE}`,
                   background: "rgba(255, 255, 255, 0.9)",
+                  color: INK,
                   outline: "none",
                   transition: "all 0.2s",
                 }}
                 onFocus={(e) => {
-                  e.target.style.borderColor = "#1a3d2e";
-                  e.target.style.boxShadow = "0 0 0 3px rgba(26, 61, 46, 0.1)";
+                  e.target.style.borderColor = INK;
+                  e.target.style.boxShadow = "0 0 0 3px rgba(63, 56, 40, 0.1)";
                 }}
                 onBlur={(e) => {
-                  e.target.style.borderColor = "rgba(26, 61, 46, 0.3)";
+                  e.target.style.borderColor = HAIRLINE;
                   e.target.style.boxShadow = "none";
                 }}
               />
@@ -187,11 +172,11 @@ export default function RequestBookPage() {
                 htmlFor="author"
                 style={{
                   display: "block",
-                  marginBottom: "8px",
-                  fontFamily: "'Crimson Text', serif",
-                  fontSize: "16px",
+                  marginBottom: 8,
+                  ...serif,
+                  fontSize: 16,
                   fontWeight: 600,
-                  color: "#1a3d2e",
+                  color: INK,
                 }}
               >
                 Author Name
@@ -207,20 +192,21 @@ export default function RequestBookPage() {
                 style={{
                   width: "100%",
                   padding: "12px 16px",
-                  fontSize: "16px",
-                  fontFamily: "'Crimson Text', serif",
-                  borderRadius: "12px",
-                  border: "1px solid rgba(26, 61, 46, 0.3)",
+                  fontSize: 16,
+                  ...serif,
+                  borderRadius: 12,
+                  border: `1px solid ${HAIRLINE}`,
                   background: "rgba(255, 255, 255, 0.9)",
+                  color: INK,
                   outline: "none",
                   transition: "all 0.2s",
                 }}
                 onFocus={(e) => {
-                  e.target.style.borderColor = "#1a3d2e";
-                  e.target.style.boxShadow = "0 0 0 3px rgba(26, 61, 46, 0.1)";
+                  e.target.style.borderColor = INK;
+                  e.target.style.boxShadow = "0 0 0 3px rgba(63, 56, 40, 0.1)";
                 }}
                 onBlur={(e) => {
-                  e.target.style.borderColor = "rgba(26, 61, 46, 0.3)";
+                  e.target.style.borderColor = HAIRLINE;
                   e.target.style.boxShadow = "none";
                 }}
               />
@@ -230,11 +216,11 @@ export default function RequestBookPage() {
               <div
                 className="mb-6 p-4 rounded-lg text-center"
                 style={{
-                  background: "rgba(76, 175, 80, 0.1)",
-                  border: "1px solid rgba(76, 175, 80, 0.3)",
+                  background: "rgba(76, 133, 80, 0.12)",
+                  border: "1px solid rgba(76, 133, 80, 0.3)",
                 }}
               >
-                <p style={{ color: "#2e7d32", fontSize: "14px", fontWeight: 600 }}>
+                <p style={{ color: "#3f6b42", fontSize: 14, fontWeight: 600 }}>
                   ✓ Request submitted successfully!
                 </p>
               </div>
@@ -246,16 +232,16 @@ export default function RequestBookPage() {
               className="w-full transition-all duration-200 hover:scale-105"
               style={{
                 padding: "14px 32px",
-                fontSize: "16px",
-                fontFamily: "'Crimson Text', serif",
+                fontSize: 16,
+                ...serif,
                 fontWeight: 600,
-                borderRadius: "12px",
-                background: user ? "#1a3d2e" : "#cccccc",
-                color: "white",
+                borderRadius: 12,
+                background: user ? BROWN : "#cccccc",
+                color: CREAM,
                 border: "none",
                 cursor: user ? "pointer" : "not-allowed",
                 letterSpacing: "-0.01em",
-                boxShadow: user ? "0 4px 20px rgba(26, 61, 46, 0.3)" : "none",
+                boxShadow: user ? "0 4px 20px rgba(36, 23, 3, 0.3)" : "none",
                 opacity: loading ? 0.7 : 1,
               }}
             >
