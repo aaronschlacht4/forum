@@ -130,9 +130,14 @@ export function measureSpineBand(
   });
   if (!jackets.length || !Number.isFinite(minX)) return null;
 
-  // The spine face is flat-ish but the binding curves, so take everything
-  // within a sliver of the min-X plane and let the U extremes define the band.
-  const tolerance = (maxX - minX) * 0.02;
+  // The spine face is flat but the binding curves away from it on both
+  // sides, and that curve is still front-on to the camera on a shelf — a
+  // tight tolerance around the true flat plane left the curved rim outside
+  // [u1, u2] entirely, so it fell through to the unmodified cover formulas
+  // below and sampled cover art on what reads as part of the spine. Widened
+  // until it plateaued (0.15 and 0.3 measured the same band), which means
+  // it's now catching the whole curve, not just the flat strip at its centre.
+  const tolerance = (maxX - minX) * 0.15;
   let u1 = Infinity;
   let u2 = -Infinity;
   for (const mesh of jackets) {
@@ -161,6 +166,10 @@ export function measureSpineBand(
  * onto the file laid out as [cover | spine·t | cover], so each face samples
  * exactly the pixels drawn for it, at matching density. At t = 1 the remap is
  * the identity and fixed-proportion files behave as before.
+ *
+ * Only called for a cover actually built to these proportions (see the
+ * `calibrated` guard around this in applyCoverTexture) — carving up a cover
+ * that wasn't drawn this way samples nonsense.
  */
 function addSpineRemap(
   mat: THREE.MeshStandardMaterial,
@@ -188,9 +197,18 @@ function addSpineRemap(
     float T  = u1 + (u2 - u1) * t + (1.0 - u2);
     float f1 = u1 / T;
     float f2 = (u1 + (u2 - u1) * t) / T;
+    // Even sampling exactly [f1, f2], GPU mip/anisotropic filtering blurs a
+    // few source texels across the hard edge into neighbouring cover art —
+    // negligible on a wide face, but a thin spine's whole sampled window can
+    // be only a few dozen texels, so that blur eats a real fraction of it.
+    // Sampling a touch inside [f1, f2] rather than right up to its edges
+    // gives the blur room to mix with more spine, not cover.
+    float margin = (f2 - f1) * 0.25;
+    float g1 = f1 + margin;
+    float g2 = f2 - margin;
     float u  = jacketUv.x;
     if (u <= u1)      jacketUv.x = (u / u1) * f1;
-    else if (u <= u2) jacketUv.x = f1 + ((u - u1) / (u2 - u1)) * (f2 - f1);
+    else if (u <= u2) jacketUv.x = g1 + ((u - u1) / (u2 - u1)) * (g2 - g1);
     else              jacketUv.x = f2 + ((u - u2) / (1.0 - u2)) * (1.0 - f2);
   }
   vec4 sampledDiffuseColor = texture2D( map, jacketUv );
@@ -611,14 +629,18 @@ export function applyCoverTexture(
   root: THREE.Object3D,
   tex: THREE.Texture,
   maxAnisotropy = 8,
-  spineScale = 1
+  spineScale = 1,
+  calibrated = false
 ): number {
   prepareCoverTexture(tex, maxAnisotropy);
   fitCoverToJacket(root, tex);
 
   // Where on the mesh's UV strip the spine face actually sits, so the shader
   // can line the file's own panels up with the faces they were drawn for.
-  const spineBand = measureSpineBand(root);
+  // Only worth measuring for a cover actually built at those proportions —
+  // for anything else this would carve the image up along boundaries that
+  // don't correspond to its content, and come out worse than no remap at all.
+  const spineBand = calibrated ? measureSpineBand(root) : null;
 
   const meshes: THREE.Mesh[] = [];
   root.traverse((o) => {

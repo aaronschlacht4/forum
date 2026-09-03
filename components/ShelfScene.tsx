@@ -28,6 +28,8 @@ export type BookData = {
   cover_path?: string;
   /** Pages in the source PDF. Drives how thick the spine renders. */
   pageCount?: number | null;
+  /** Whether this book's cover file is actually built for the spine remap. */
+  coverCalibrated?: boolean;
   /**
    * Identifies this copy on the shelf rather than the book. A duplicated book
    * gives two entries sharing an `id`, so this is what keys them apart and what
@@ -484,7 +486,7 @@ function ShelfBooks({
 
       const settled = coverCache.get(url);
       if (settled) {
-        applyCoverTexture(p.bookRoot, settled, maxAnisotropy, p.thickness);
+        applyCoverTexture(p.bookRoot, settled, maxAnisotropy, p.thickness, p.data.coverCalibrated);
         invalidate();
         return;
       }
@@ -495,7 +497,7 @@ function ShelfBooks({
       }
 
       loadCover(texLoader, url).then((tex) => {
-        if (tex) applyCoverTexture(p.bookRoot, tex, maxAnisotropy, p.thickness);
+        if (tex) applyCoverTexture(p.bookRoot, tex, maxAnisotropy, p.thickness, p.data.coverCalibrated);
         else applyBlankCover(p.bookRoot, p.id);
         invalidate();
       });

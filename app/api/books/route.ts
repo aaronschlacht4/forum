@@ -12,6 +12,8 @@ type BookRow = {
   cover_path: string | null;
   // Absent entirely until sql-migrations/11-add-page-count.sql has run.
   page_count?: number | null;
+  // Absent entirely until sql-migrations/12-add-cover-calibrated.sql has run.
+  cover_calibrated?: boolean;
 };
 
 export async function GET(req: Request) {
@@ -22,24 +24,23 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const q = (searchParams.get("q") || "").trim();
 
-    let query = supabaseAdmin
-      .from("books")
-      .select("id,title,author,pdf_path,cover_path,page_count")
-      .order("title", { ascending: true });
-    if (q.length > 0) query = query.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
+    // Tried richest-select first, falling back a column at a time — each of
+    // these migrations may or may not have been run yet (see
+    // ShelvesNotSetUpError in lib/library.ts for the same pattern), and the
+    // catalogue has to keep working regardless of exactly where things stand.
+    const selects = [
+      "id,title,author,pdf_path,cover_path,page_count,cover_calibrated",
+      "id,title,author,pdf_path,cover_path,page_count",
+      "id,title,author,pdf_path,cover_path",
+    ];
 
-    let { data, error }: { data: any; error: any } = await query;
-
-    // sql-migrations/11-add-page-count.sql hasn't necessarily been run yet —
-    // the catalogue still has to work without it, same as library_items does
-    // before its own migration (see ShelvesNotSetUpError in lib/library.ts).
-    if (error?.code === "42703") {
-      let fallback = supabaseAdmin
-        .from("books")
-        .select("id,title,author,pdf_path,cover_path")
-        .order("title", { ascending: true });
-      if (q.length > 0) fallback = fallback.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
-      ({ data, error } = await fallback);
+    let data: any;
+    let error: any;
+    for (const select of selects) {
+      let query = supabaseAdmin.from("books").select(select).order("title", { ascending: true });
+      if (q.length > 0) query = query.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
+      ({ data, error } = await query);
+      if (error?.code !== "42703") break;
     }
 
     console.log("🔍 Supabase query result:", { dataCount: data?.length, error });
@@ -74,6 +75,7 @@ export async function GET(req: Request) {
           pdfUrl,
           cover_path: b.cover_path,
           pageCount: b.page_count,
+          coverCalibrated: b.cover_calibrated ?? false,
         };
       })
     );
