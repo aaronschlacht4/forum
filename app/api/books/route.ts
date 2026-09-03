@@ -10,6 +10,8 @@ type BookRow = {
   author: string | null;
   pdf_path: string | null;
   cover_path: string | null;
+  // Absent entirely until sql-migrations/11-add-page-count.sql has run.
+  page_count?: number | null;
 };
 
 export async function GET(req: Request) {
@@ -22,14 +24,23 @@ export async function GET(req: Request) {
 
     let query = supabaseAdmin
       .from("books")
-      .select("id,title,author,pdf_path,cover_path")
+      .select("id,title,author,pdf_path,cover_path,page_count")
       .order("title", { ascending: true });
+    if (q.length > 0) query = query.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
 
-    if (q.length > 0) {
-      query = query.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
+    let { data, error }: { data: any; error: any } = await query;
+
+    // sql-migrations/11-add-page-count.sql hasn't necessarily been run yet —
+    // the catalogue still has to work without it, same as library_items does
+    // before its own migration (see ShelvesNotSetUpError in lib/library.ts).
+    if (error?.code === "42703") {
+      let fallback = supabaseAdmin
+        .from("books")
+        .select("id,title,author,pdf_path,cover_path")
+        .order("title", { ascending: true });
+      if (q.length > 0) fallback = fallback.or(`title.ilike.%${q}%,author.ilike.%${q}%`);
+      ({ data, error } = await fallback);
     }
-
-    const { data, error } = await query;
 
     console.log("🔍 Supabase query result:", { dataCount: data?.length, error });
 
@@ -62,6 +73,7 @@ export async function GET(req: Request) {
           pdfPath: b.pdf_path,
           pdfUrl,
           cover_path: b.cover_path,
+          pageCount: b.page_count,
         };
       })
     );

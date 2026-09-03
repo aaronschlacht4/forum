@@ -26,6 +26,8 @@ export type BookData = {
   author?: string;
   pdfUrl?: string;
   cover_path?: string;
+  /** Pages in the source PDF. Drives how thick the spine renders. */
+  pageCount?: number | null;
   /**
    * Identifies this copy on the shelf rather than the book. A duplicated book
    * gives two entries sharing an `id`, so this is what keys them apart and what
@@ -69,6 +71,22 @@ const FRONT_INSET = 0.15;
 const SIDE_MARGIN = 0.04;
 // Gap between neighbouring books, as a fraction of one book's width.
 const BOOK_GAP = 0.08;
+// A book with no known page count (not yet extracted, or one of the fallback
+// placeholders) renders at the same width every book used to have.
+const DEFAULT_PAGE_COUNT = 300;
+// Thickness grows with page count, but damped by a square root — a book
+// twice as long shouldn't read as twice as fat on the shelf — and capped so
+// no one book can crowd its neighbours off a row.
+const THICKNESS_MIN = 0.55;
+const THICKNESS_MAX = 1.7;
+
+/** How wide a book's spine renders, as a multiple of the shelf's base width. */
+function spineThickness(pageCount?: number | null): number {
+  if (!pageCount || pageCount <= 0) return 1;
+  const raw = Math.sqrt(pageCount / DEFAULT_PAGE_COUNT);
+  return Math.min(THICKNESS_MAX, Math.max(THICKNESS_MIN, raw));
+}
+
 // Guard against a pathological shelf trying to build thousands of clones. This
 // bounds how many books are *drawn*, not how many slots a shelf has — capping
 // the slots left the columns stopping short of the shelf's right-hand end, so
@@ -179,6 +197,59 @@ function rowSlots(bounds: Bounds, book: BookMetrics, count: number) {
 /** How many books one shelf holds — used to deal the reading order into rows. */
 export function rowCapacity(bounds: Bounds, book: BookMetrics) {
   return rowSlots(bounds, book, 0).capacity;
+}
+
+type SlotPlacement = { row: number; x: number; width: number };
+
+/**
+ * Where every book on the bookcase stands, now that they aren't all the same
+ * width.
+ *
+ * `rowSlots` above deals books into a fixed number of equal-width slots per
+ * row — fine when every book is the same model at the same scale, but a
+ * thicker book now needs more of its row than a thin one, so a row's real
+ * capacity depends on exactly which books land in it. This walks the whole
+ * bookcase once, in reading order, adding each book's own width to its row
+ * until the next one would run past the shelf's edge, then wraps to the next
+ * row — the way books actually get shelved.
+ *
+ * A slot nobody occupies still gets one, at the shelf's default width, so an
+ * empty spot stays a real place on the bookcase — the same guarantee gaps had
+ * under the old fixed grid — rather than closing up around its neighbours.
+ */
+function buildRowLayout(
+  bounds: Bounds,
+  book: BookMetrics,
+  bySlot: Map<number, BookData>,
+  rows: number
+): Map<number, SlotPlacement> {
+  const base = shelfLayout(bounds, book);
+  const span = bounds.size.x * (1 - SIDE_MARGIN * 2);
+  const layout = new Map<number, SlotPlacement>();
+  if (!(base.width > 1e-6) || !(base.scale > 0) || span < base.width) return layout;
+
+  const rowStart = bounds.center.x - span / 2;
+  const rowEnd = rowStart + span;
+  const gap = base.width * BOOK_GAP;
+
+  let slot = 0;
+  for (let row = 0; row < rows; row++) {
+    let cursor = rowStart;
+    let placedInRow = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const width = base.width * spineThickness(bySlot.get(slot)?.pageCount);
+      const needed = placedInRow === 0 ? width : gap + width;
+      // The row's first book always gets a place, even one that alone runs
+      // past the edge — the same guarantee rowSlots made with Math.max(1, …).
+      if (placedInRow > 0 && cursor + needed > rowEnd) break;
+      cursor += needed;
+      layout.set(slot, { row, x: cursor - width / 2, width });
+      slot++;
+      placedInRow++;
+    }
+  }
+  return layout;
 }
 
 /**
@@ -295,7 +366,6 @@ function ShelfBooks({
   books,
   bounds,
   shelfH,
-  perRow,
   editable = false,
   onMove,
   onDuplicate,
@@ -304,7 +374,6 @@ function ShelfBooks({
   books: BookData[];
   bounds: Bounds;
   shelfH: number;
-  perRow: number;
   editable?: boolean;
   onMove?: (from: number, to: number) => void;
   onDuplicate?: (index: number) => void;
@@ -330,9 +399,25 @@ function ShelfBooks({
     startY: number;
   } | null>(null);
 
-  const slots = useMemo(
-    () => rowSlots(bounds, book, books.length),
-    [bounds, book, books.length]
+  /** The slot a book occupies, falling back to reading order for a plain list. */
+  const slotOf = useCallback(
+    (b: BookData, i: number) => b.slot ?? i,
+    []
+  );
+
+  // Every book's own footprint, keyed by the slot it stands in — what
+  // buildRowLayout walks to decide where each row wraps.
+  const bySlot = useMemo(() => {
+    const m = new Map<number, BookData>();
+    books.forEach((b, i) => m.set(slotOf(b, i), b));
+    return m;
+  }, [books, slotOf]);
+
+  const base = useMemo(() => shelfLayout(bounds, book), [bounds, book]);
+  const span = bounds.size.x * (1 - SIDE_MARGIN * 2);
+  const layout = useMemo(
+    () => buildRowLayout(bounds, book, bySlot, N_ROWS),
+    [bounds, book, bySlot]
   );
 
   // Every book on the bookcase is laid out here rather than a component per
@@ -340,30 +425,24 @@ function ShelfBooks({
   // of being trapped in the row that happens to own it.
   const place = useCallback(
     (slot: number) => {
-      const pitch = slots.width + slots.gap;
-      const fromTop = perRow > 0 ? Math.floor(slot / perRow) : 0;
-      const column = perRow > 0 ? slot % perRow : 0;
+      const p = layout.get(slot);
       return {
-        x: slots.firstX + column * pitch,
-        y: (N_ROWS - 1 - fromTop) * shelfH + slots.restY,
-        z: slots.restZ,
+        x: p?.x ?? bounds.center.x,
+        y: (N_ROWS - 1 - (p?.row ?? 0)) * shelfH + base.restY,
+        z: base.restZ,
       };
     },
-    [slots, perRow, shelfH]
+    [layout, base, shelfH, bounds.center.x]
   );
 
-  /** The slot a book occupies, falling back to reading order for a plain list. */
-  const slotOf = useCallback(
-    (b: BookData, i: number) => b.slot ?? i,
-    []
-  );
-
-  const capacity = Math.max(0, perRow * N_ROWS);
-  const shown = Math.min(books.length, capacity, MAX_BOOKS_DRAWN);
+  const shown = Math.min(books.length, MAX_BOOKS_DRAWN);
 
   const placed = useMemo(() => {
-    if (shown === 0 || slots.width <= 1e-6) return [];
-    return books.slice(0, shown).map((b, i) => {
+    if (shown === 0 || base.width <= 1e-6) return [];
+    return books.slice(0, shown).flatMap((b, i) => {
+      const slot = slotOf(b, i);
+      if (!layout.has(slot)) return []; // ran past what N_ROWS can hold
+
       const id = String(b.id ?? `book-${i}`);
       const key = b.itemId ?? `${id}-${i}`;
 
@@ -384,12 +463,16 @@ function ShelfBooks({
       // Quarter turn brings the spine — the model's -X face, the middle band of
       // the jacket — around to meet the reader.
       wrapper.rotation.y = SPINE_OUT_YAW;
-      wrapper.scale.setScalar(slots.scale);
+      // Height and depth stay the shelf's uniform scale; only the axis that
+      // becomes the along-shelf spine width (local Z, swung round to world X
+      // by the turn above) grows or shrinks with the book's own page count.
+      const thickness = spineThickness(b.pageCount);
+      wrapper.scale.set(base.scale, base.scale, base.scale * thickness);
       wrapper.updateMatrixWorld(true);
 
       return { id, key, data: b, wrapper, bookRoot };
     });
-  }, [books, shown, slots, baseScene, book]);
+  }, [books, shown, layout, base, slotOf, baseScene, book]);
 
   useEffect(() => {
     // Re-runs whenever the shelf is rebuilt, dressing whichever clones are
@@ -422,7 +505,7 @@ function ShelfBooks({
   // Slide the shelf apart around whatever is being dragged. Positions are
   // written straight onto the wrappers so a drag doesn't rebuild every clone.
   useEffect(() => {
-    const lift = slots.width * 0.5;
+    const lift = base.width * 0.5;
     placed.forEach((p, i) => {
       const home = place(slotOf(p.data, i));
       const held = drag?.from === i;
@@ -434,7 +517,7 @@ function ShelfBooks({
       p.wrapper.updateMatrixWorld(true);
     });
     invalidate();
-  }, [placed, drag, place, slotOf, slots.width, invalidate]);
+  }, [placed, drag, place, slotOf, base.width, invalidate]);
 
   /** Where a pointer sits on the face of the bookcase, in world units. */
   const pointerOnShelf = useCallback(
@@ -447,11 +530,11 @@ function ShelfBooks({
       );
       const caster = new THREE.Raycaster();
       caster.setFromCamera(ndc, camera);
-      const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -slots.restZ);
+      const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -base.restZ);
       const hit = new THREE.Vector3();
       return caster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
     },
-    [camera, gl, slots.restZ]
+    [camera, gl, base.restZ]
   );
 
   /**
@@ -459,18 +542,27 @@ function ShelfBooks({
    *
    * Deliberately not clamped to the number of books: an empty slot is a real
    * destination, which is what lets a book be moved down to a shelf that has
-   * nothing on it yet.
+   * nothing on it yet. Rows no longer hold a fixed count, so the target row
+   * is found by height as before, then the slot within it by whichever of
+   * that row's own placements sits closest to the pointer.
    */
   const slotAt = useCallback(
     (x: number, y: number) => {
-      if (perRow <= 0) return 0;
-      const pitch = slots.width + slots.gap;
-      const worldRow = Math.round((y - slots.restY) / Math.max(shelfH, 1e-6));
-      const fromTop = Math.max(0, Math.min(N_ROWS - 1, N_ROWS - 1 - worldRow));
-      const column = Math.max(0, Math.min(perRow - 1, Math.round((x - slots.firstX) / pitch)));
-      return fromTop * perRow + column;
+      const worldRow = Math.round((y - base.restY) / Math.max(shelfH, 1e-6));
+      const targetRow = Math.max(0, Math.min(N_ROWS - 1, N_ROWS - 1 - worldRow));
+      let best = 0;
+      let bestDist = Infinity;
+      for (const [slot, p] of layout) {
+        if (p.row !== targetRow) continue;
+        const d = Math.abs(p.x - x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = slot;
+        }
+      }
+      return best;
     },
-    [perRow, slots, shelfH]
+    [layout, base.restY, shelfH]
   );
 
   // Keyed on whether a drag is running, not on the drag itself: including the
@@ -496,14 +588,15 @@ function ShelfBooks({
       cur.to = to;
       cur.moved = true;
       // Hold the book on the bookcase so it can't be dragged off into space.
-      const pitch = slots.width + slots.gap;
+      // Rows no longer share one pitch, so this clamps to the shelf's own
+      // physical span rather than a column count.
       const x = Math.max(
-        slots.firstX,
-        Math.min(slots.firstX + (Math.max(perRow, 1) - 1) * pitch, at.x)
+        bounds.center.x - span / 2,
+        Math.min(bounds.center.x + span / 2, at.x)
       );
       const y = Math.max(
-        slots.restY,
-        Math.min((N_ROWS - 1) * shelfH + slots.restY, at.y)
+        base.restY,
+        Math.min((N_ROWS - 1) * shelfH + base.restY, at.y)
       );
       setDrag((d) => (d ? { ...d, to, x, y } : d));
     };
@@ -532,7 +625,7 @@ function ShelfBooks({
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
     };
-  }, [dragging, slots, perRow, shelfH, pointerOnShelf, slotAt, onMove]);
+  }, [dragging, base, span, bounds.center.x, shelfH, pointerOnShelf, slotAt, onMove]);
 
   useEffect(() => {
     const cursor = drag ? "grabbing" : hovered !== null ? (editable ? "grab" : "pointer") : "default";
@@ -581,7 +674,7 @@ function ShelfBooks({
 
       {editable && active && activeAt && !drag && (
         <Html
-          position={[activeAt.x, activeAt.y + book.size.y * slots.scale, activeAt.z]}
+          position={[activeAt.x, activeAt.y + book.size.y * base.scale, activeAt.z]}
           center
           distanceFactor={8}
           zIndexRange={[20, 10]}
@@ -760,7 +853,6 @@ function LibraryRows({
           books={books}
           bounds={shelfBounds}
           shelfH={shelfH}
-          perRow={perRow}
           editable={editable}
           onMove={onMove}
           onDuplicate={onDuplicate}

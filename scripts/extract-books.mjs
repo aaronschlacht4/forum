@@ -82,6 +82,16 @@ async function downloadPdf(pdfPath) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/** Keeps the row's page_count matching the text this run just extracted. */
+async function patchPageCount(id, pageCount) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/books?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { ...AUTH, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ page_count: pageCount }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 140)}`);
+}
+
 /* ---- pdf.js, wherever it happens to live ---- */
 
 async function loadPdfjs() {
@@ -405,7 +415,10 @@ async function main() {
       const json = JSON.stringify(result, null, 2);
       const name = `${slugify(book.title)}.json`;
       fs.writeFileSync(path.join(OPTIONS.out, name), json);
-      if (OPTIONS.upload) await upload(name, json);
+      if (OPTIONS.upload) {
+        await upload(name, json);
+        await patchPageCount(book.id, result.pageCount);
+      }
 
       console.log(
         `  ${label} ${String(result.pageCount).padStart(4)} pages  ` +
