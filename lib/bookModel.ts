@@ -4,15 +4,19 @@ import * as THREE from "three";
  * The book model every shelf/card renders. To swap in a new UV-edited book,
  * drop the .glb into `public/models/` and change this one line.
  *
- * A book's JPG is its jacket laid out flat, full bleed, left to right:
+ * A book's JPG is its jacket laid out flat, full bleed, left to right —
+ * back cover, spine, front cover, with the front facing the reader. Draw it
+ * at the book's own honest proportions: covers at a fixed width, the spine
+ * scaled by the book's thickness factor (√(pageCount/300), clamped 0.55–1.7).
+ * Against a 1200px-tall canvas that means 921px per cover and 203px × the
+ * thickness factor for the spine — e.g. a 69-page book gets a 112px spine on
+ * a 1954px-wide file; a 300-page one the classic 203px on 2045px.
  *
- *     back cover 45%  |  spine 10%  |  front cover 45%   ← front faces the reader
- *
- * Aim for roughly 1.70 : 1 (say 2040 × 1200) — that is this book unwrapped,
- * (back + spine + front) wide by one cover tall. A bare front-cover crop will
- * not do: its middle would land on the spine. The image is stretched onto
- * whatever slice of the atlas the model gives the jacket, so it needs no
- * padding to match the model's own UV layout.
+ * The spine-remap shader in makeCoverMaterial is what honours those
+ * proportions: the mesh's UV strip splits at fixed fractions sized for the
+ * default thickness, and the shader projects them onto the file's own bands,
+ * so each face samples exactly the pixels drawn for it. A bare front-cover
+ * crop will not do: its middle would land on the spine.
  */
 export const BOOK_MODEL_URL = "/models/book2.glb";
 
@@ -96,13 +100,118 @@ export function measureBookBody(root: THREE.Object3D): THREE.Box3 {
 
 let warnedNoJacketMaterial = false;
 
+/**
+ * The mesh's own spine band: the U range its -X face (the spine) samples.
+ *
+ * The jacket is one continuous mesh — back, spine, front in a single UV strip
+ * — so the boundaries between panels exist only implicitly, as which U values
+ * land on which face. Measured directly off the geometry (the vertices lying
+ * on the model's min-X plane are the spine's), rather than hardcoded, so a
+ * re-exported model recalibrates itself.
+ */
+export function measureSpineBand(
+  root: THREE.Object3D
+): { u1: number; u2: number } | null {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  const jackets: THREE.Mesh[] = [];
+
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (!mats.some((m) => m && JACKET_MATERIAL_PATTERN.test(m.name ?? ""))) return;
+    jackets.push(mesh);
+    const pos = mesh.geometry.getAttribute("position");
+    for (let i = 0; i < pos.count; i++) {
+      minX = Math.min(minX, pos.getX(i));
+      maxX = Math.max(maxX, pos.getX(i));
+    }
+  });
+  if (!jackets.length || !Number.isFinite(minX)) return null;
+
+  // The spine face is flat-ish but the binding curves, so take everything
+  // within a sliver of the min-X plane and let the U extremes define the band.
+  const tolerance = (maxX - minX) * 0.02;
+  let u1 = Infinity;
+  let u2 = -Infinity;
+  for (const mesh of jackets) {
+    const pos = mesh.geometry.getAttribute("position");
+    const uv = mesh.geometry.getAttribute("uv");
+    if (!uv) continue;
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getX(i) > minX + tolerance) continue;
+      u1 = Math.min(u1, uv.getX(i));
+      u2 = Math.max(u2, uv.getX(i));
+    }
+  }
+  return u2 > u1 ? { u1, u2 } : null;
+}
+
+/**
+ * Sample the cover at the file's own panel proportions instead of the mesh's.
+ *
+ * The mesh's UV strip divides back/spine/front at fixed fractions, sized for
+ * a book at default thickness. A book's spine geometry, though, is scaled by
+ * its page count — so a cover file drawn with its spine at `s·t` of the width
+ * (the honest proportions of *that* book) would render smeared: the mesh
+ * would stretch the file's fixed-fraction spine slice across the scaled face.
+ *
+ * This remaps U in the fragment shader: the mesh's fixed bands are projected
+ * onto the file laid out as [cover | spine·t | cover], so each face samples
+ * exactly the pixels drawn for it, at matching density. At t = 1 the remap is
+ * the identity and fixed-proportion files behave as before.
+ */
+function addSpineRemap(
+  mat: THREE.MeshStandardMaterial,
+  band: { u1: number; u2: number },
+  thickness: number
+) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.spineRemap = {
+      value: new THREE.Vector3(band.u1, band.u2, thickness),
+    };
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <map_pars_fragment>",
+        "#include <map_pars_fragment>\nuniform vec3 spineRemap;"
+      )
+      .replace(
+        "#include <map_fragment>",
+        /* glsl */ `
+#ifdef USE_MAP
+  vec2 jacketUv = vMapUv;
+  {
+    float u1 = spineRemap.x;
+    float u2 = spineRemap.y;
+    float t  = spineRemap.z;
+    float T  = u1 + (u2 - u1) * t + (1.0 - u2);
+    float f1 = u1 / T;
+    float f2 = (u1 + (u2 - u1) * t) / T;
+    float u  = jacketUv.x;
+    if (u <= u1)      jacketUv.x = (u / u1) * f1;
+    else if (u <= u2) jacketUv.x = f1 + ((u - u1) / (u2 - u1)) * (f2 - f1);
+    else              jacketUv.x = f2 + ((u - u2) / (1.0 - u2)) * (1.0 - f2);
+  }
+  vec4 sampledDiffuseColor = texture2D( map, jacketUv );
+  diffuseColor *= sampledDiffuseColor;
+#endif
+`
+      );
+  };
+  mat.needsUpdate = true;
+}
+
 function makeCoverMaterial(
   source: THREE.Material,
-  tex: THREE.Texture
+  tex: THREE.Texture,
+  spineBand?: { u1: number; u2: number } | null,
+  spineScale = 1
 ): THREE.Material {
   const mat = source.clone() as THREE.MeshStandardMaterial;
   mat.map = tex;
   mat.color?.set(0xffffff);
+  if (spineBand) addSpineRemap(mat, spineBand, spineScale);
 
   // Every other map on this material was baked from the cover art the model
   // shipped with — book2.glb even points normalMap and roughnessMap at the same
@@ -501,10 +610,15 @@ export function applyBlankCover(root: THREE.Object3D, seed: string): number {
 export function applyCoverTexture(
   root: THREE.Object3D,
   tex: THREE.Texture,
-  maxAnisotropy = 8
+  maxAnisotropy = 8,
+  spineScale = 1
 ): number {
   prepareCoverTexture(tex, maxAnisotropy);
   fitCoverToJacket(root, tex);
+
+  // Where on the mesh's UV strip the spine face actually sits, so the shader
+  // can line the file's own panels up with the faces they were drawn for.
+  const spineBand = measureSpineBand(root);
 
   const meshes: THREE.Mesh[] = [];
   root.traverse((o) => {
@@ -521,7 +635,7 @@ export function applyCoverTexture(
     const one = (m: THREE.Material) => {
       if (!match(m)) return accent ? tintMaterial(m, accent) : m;
       count++;
-      return makeCoverMaterial(m, tex);
+      return makeCoverMaterial(m, tex, spineBand, spineScale);
     };
     for (const mesh of meshes) {
       mesh.material = Array.isArray(mesh.material)

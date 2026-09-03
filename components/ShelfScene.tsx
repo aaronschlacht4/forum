@@ -470,7 +470,7 @@ function ShelfBooks({
       wrapper.scale.set(base.scale, base.scale, base.scale * thickness);
       wrapper.updateMatrixWorld(true);
 
-      return { id, key, data: b, wrapper, bookRoot };
+      return { id, key, data: b, wrapper, bookRoot, thickness };
     });
   }, [books, shown, layout, base, slotOf, baseScene, book]);
 
@@ -484,7 +484,7 @@ function ShelfBooks({
 
       const settled = coverCache.get(url);
       if (settled) {
-        applyCoverTexture(p.bookRoot, settled, maxAnisotropy);
+        applyCoverTexture(p.bookRoot, settled, maxAnisotropy, p.thickness);
         invalidate();
         return;
       }
@@ -495,7 +495,7 @@ function ShelfBooks({
       }
 
       loadCover(texLoader, url).then((tex) => {
-        if (tex) applyCoverTexture(p.bookRoot, tex, maxAnisotropy);
+        if (tex) applyCoverTexture(p.bookRoot, tex, maxAnisotropy, p.thickness);
         else applyBlankCover(p.bookRoot, p.id);
         invalidate();
       });
