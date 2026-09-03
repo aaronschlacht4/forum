@@ -134,10 +134,11 @@ export function measureSpineBand(
   // sides, and that curve is still front-on to the camera on a shelf — a
   // tight tolerance around the true flat plane left the curved rim outside
   // [u1, u2] entirely, so it fell through to the unmodified cover formulas
-  // below and sampled cover art on what reads as part of the spine. Widened
-  // until it plateaued (0.15 and 0.3 measured the same band), which means
-  // it's now catching the whole curve, not just the flat strip at its centre.
-  const tolerance = (maxX - minX) * 0.15;
+  // below and sampled cover art on what reads as part of the spine, worst
+  // from an angle where more of the curve is on camera. Swept from 5% to
+  // 50% and it plateaus at 10% (u1/u2 stop moving) — 20% sits inside that
+  // plateau with room either side, rather than right at its edge.
+  const tolerance = (maxX - minX) * 0.20;
   let u1 = Infinity;
   let u2 = -Infinity;
   for (const mesh of jackets) {
@@ -189,6 +190,20 @@ function addSpineRemap(
         "#include <map_fragment>",
         /* glsl */ `
 #ifdef USE_MAP
+  // The screen-space derivative of the ORIGINAL uv, before the remap below —
+  // taken here because it's smooth and continuous across the whole mesh, the
+  // way an ordinary UV mapping is. The remap is piecewise (three different
+  // linear pieces stitched at u1 and u2), so its own derivative jumps at
+  // those seams; letting the GPU's automatic mip selection differentiate the
+  // *remapped* coordinate reads that jump as "this texture is changing very
+  // fast right here" and picks a far blurrier mip than the image actually
+  // needs, smearing neighbouring cover art into a band around the seam far
+  // wider than the couple of texels ordinary filtering would blur. Sampling
+  // with this pre-remap gradient instead keeps the mip selection tied to how
+  // fast the surface is actually foreshortening, not to an artifact of the
+  // remap's own math.
+  vec2 gradX = dFdx(vMapUv);
+  vec2 gradY = dFdy(vMapUv);
   vec2 jacketUv = vMapUv;
   {
     float u1 = spineRemap.x;
@@ -197,13 +212,10 @@ function addSpineRemap(
     float T  = u1 + (u2 - u1) * t + (1.0 - u2);
     float f1 = u1 / T;
     float f2 = (u1 + (u2 - u1) * t) / T;
-    // Even sampling exactly [f1, f2], GPU mip/anisotropic filtering blurs a
-    // few source texels across the hard edge into neighbouring cover art —
-    // negligible on a wide face, but a thin spine's whole sampled window can
-    // be only a few dozen texels, so that blur eats a real fraction of it.
-    // Sampling a touch inside [f1, f2] rather than right up to its edges
-    // gives the blur room to mix with more spine, not cover.
-    float margin = (f2 - f1) * 0.25;
+    // Belt and braces on top of the explicit gradient above: still leaves a
+    // small buffer inside [f1, f2] for whatever ordinary filtering blur is
+    // left once the mip-selection artifact above is gone.
+    float margin = (f2 - f1) * 0.12;
     float g1 = f1 + margin;
     float g2 = f2 - margin;
     float u  = jacketUv.x;
@@ -211,7 +223,7 @@ function addSpineRemap(
     else if (u <= u2) jacketUv.x = g1 + ((u - u1) / (u2 - u1)) * (g2 - g1);
     else              jacketUv.x = f2 + ((u - u2) / (1.0 - u2)) * (1.0 - f2);
   }
-  vec4 sampledDiffuseColor = texture2D( map, jacketUv );
+  vec4 sampledDiffuseColor = textureGrad( map, jacketUv, gradX, gradY );
   diffuseColor *= sampledDiffuseColor;
 #endif
 `
