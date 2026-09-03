@@ -1,0 +1,37 @@
+Base panel proportions:
+
+    Panel	Share of total width
+      Back cover	45.04%
+      Spine (at default thickness)	9.91%
+      Front cover	45.04%
+    Base aspect ratio: 1.7042 : 1 (width : height)
+
+2. Spine thickness factor (per book, from page count)
+
+      thickness = clamp( √(pageCount / 300),  0.55,  1.7 )
+      300 pages → thickness = 1.0 (the reference book)
+      Below 300 → thickness < 1, floored at 0.55
+      Above 300 → thickness > 1, capped at 1.7
+
+3. Combining them — pixel formula for one book's cover PNG
+
+Pick a reference height H (e.g. 1200px). Then:
+
+      frontWidth = spineWidth = 0.4504 × (H × 1.7042)     → constant per book, ≈ 0.7677 × H
+      baseSpineWidth = 0.0991 × (H × 1.7042)              → ≈ 0.1690 × H
+
+      spineWidth(book) = baseSpineWidth × thickness(book)
+      totalWidth(book) = 2 × frontWidth + spineWidth(book)
+      totalHeight       = H
+4. Worked reference values (H = 1200px)
+
+  Value	Formula	Pixels
+      Front/back cover width (fixed)	0.7677 × 1200	921px
+      Base spine width (thickness = 1)	0.1690 × 1200	203px
+      Total width, thickness = 1 (≈300pp)	2×921 + 203	2045px
+      Total width, thickness = 0.55 (floor, ≤~91pp)	2×921 + 112	1954px
+      Total width, thickness = 1.7 (ceiling, ≥~866pp)	2×921 + 345	2187px
+
+
+One-line summary: front and back cover are always 0.7677 × H each; only the spine band moves, by 0.1690 × H × thickness; total width is those three added together, height stays H.
+
