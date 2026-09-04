@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Environment, Html, useGLTF } from "@react-three/drei";
+import { Copy, Trash2 } from "lucide-react";
 import * as THREE from "three";
 import {
   BOOK_MODEL_URL,
@@ -511,15 +512,18 @@ function ShelfBooks({
     placed.forEach((p, i) => {
       const home = place(slotOf(p.data, i));
       const held = drag?.from === i;
+      // A selected book eases up out of the row, so the action card floating
+      // beside it visibly belongs to *this* book and not a neighbour.
+      const picked = !drag && editable && selected === i;
       p.wrapper.position.set(
         held ? drag.x : home.x,
-        held ? drag.y + lift : home.y,
+        held ? drag.y + lift : picked ? home.y + lift * 0.45 : home.y,
         home.z
       );
       p.wrapper.updateMatrixWorld(true);
     });
     invalidate();
-  }, [placed, drag, place, slotOf, base.width, invalidate]);
+  }, [placed, drag, editable, selected, place, slotOf, base.width, invalidate]);
 
   /** Where a pointer sits on the face of the bookcase, in world units. */
   const pointerOnShelf = useCallback(
@@ -676,24 +680,42 @@ function ShelfBooks({
 
       {editable && active && activeAt && !drag && (
         <Html
-          position={[activeAt.x, activeAt.y + book.size.y * base.scale, activeAt.z]}
+          // On the book, not above it: anchored at the spine's mid-height and
+          // pulled toward the camera, the card reads as a label pinned to the
+          // selected book — it can't drift into the header or sit ambiguously
+          // between two neighbours the way a floating pill row did.
+          position={[
+            activeAt.x,
+            activeAt.y + book.size.y * base.scale * 0.62,
+            activeAt.z + 0.5,
+          ]}
           center
           distanceFactor={8}
           zIndexRange={[20, 10]}
         >
-          <div style={{ display: "flex", gap: 6, padding: "10px 4px" }}>
+          <div className="shelf-book-card">
+            <style>{shelfCardCss}</style>
+            <div className="shelf-book-card__title">
+              {active.data.title ?? "Untitled"}
+            </div>
+            {active.data.author && (
+              <div className="shelf-book-card__author">{active.data.author}</div>
+            )}
+            <div className="shelf-book-card__rule" />
             <button
-              title={`Duplicate ${active.data.title ?? "book"}`}
+              className="shelf-book-card__action"
+              title={`Add another copy of ${active.data.title ?? "this book"}`}
               onClick={() => onDuplicate?.(pick!)}
-              style={shelfButton}
             >
+              <Copy size={12} strokeWidth={1.75} aria-hidden />
               Duplicate
             </button>
             <button
-              title={`Remove ${active.data.title ?? "book"} from your shelf`}
+              className="shelf-book-card__action shelf-book-card__action--remove"
+              title={`Take ${active.data.title ?? "this book"} off the shelf`}
               onClick={() => { setSelected(null); onRemove?.(pick!); }}
-              style={{ ...shelfButton, color: "#ffd0c0" }}
             >
+              <Trash2 size={12} strokeWidth={1.75} aria-hidden />
               Remove
             </button>
           </div>
@@ -703,18 +725,90 @@ function ShelfBooks({
   );
 }
 
-const shelfButton: React.CSSProperties = {
-  background: "rgba(28,18,8,0.92)",
-  border: "1px solid rgba(255,208,140,0.4)",
-  borderRadius: 999,
-  color: "#ffe8c0",
-  cursor: "pointer",
-  fontFamily: "system-ui",
-  fontSize: 11,
-  letterSpacing: 0.4,
-  padding: "5px 11px",
-  whiteSpace: "nowrap",
-};
+/**
+ * The action card shown over a selected book while arranging. A <style> tag
+ * rather than inline styles because hover/press states have no inline form,
+ * and the card is markup inside drei's <Html>, outside every stylesheet the
+ * app owns.
+ */
+const shelfCardCss = /* css */ `
+/* Transform only, never opacity: with the canvas on a demand frameloop the
+   compositor can leave a pending animation at 0% indefinitely, and a card
+   stuck at "from" must still be readable. Stuck here means offset by 5px;
+   stuck on an opacity fade meant invisible. */
+@keyframes shelf-book-card-in {
+  from { transform: translateY(5px) scale(0.97); }
+  to   { transform: none; }
+}
+.shelf-book-card {
+  animation: shelf-book-card-in 130ms ease-out;
+  background: linear-gradient(170deg, rgba(46,32,18,0.97), rgba(26,16,7,0.97));
+  border: 1px solid rgba(255,208,140,0.28);
+  border-radius: 11px;
+  box-shadow:
+    0 1px 0 rgba(255,224,170,0.09) inset,
+    0 10px 28px rgba(0,0,0,0.55),
+    0 2px 8px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, sans-serif;
+  min-width: 128px;
+  max-width: 170px;
+  padding: 10px 6px 6px;
+}
+.shelf-book-card__title {
+  color: #f3dcae;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.55px;
+  line-height: 1.3;
+  overflow: hidden;
+  padding: 0 8px;
+  text-align: center;
+  text-transform: uppercase;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.shelf-book-card__author {
+  color: rgba(243,220,174,0.55);
+  font-size: 9.5px;
+  font-style: italic;
+  letter-spacing: 0.3px;
+  overflow: hidden;
+  padding: 2px 8px 0;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shelf-book-card__rule {
+  background: linear-gradient(90deg, transparent, rgba(255,208,140,0.3), transparent);
+  height: 1px;
+  margin: 8px 4px 4px;
+}
+.shelf-book-card__action {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: #ffe8c0;
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 11px;
+  gap: 8px;
+  letter-spacing: 0.35px;
+  padding: 6px 9px;
+  text-align: left;
+  transition: background 90ms ease;
+  white-space: nowrap;
+}
+.shelf-book-card__action:hover { background: rgba(255,208,140,0.12); }
+.shelf-book-card__action:active { background: rgba(255,208,140,0.2); }
+.shelf-book-card__action--remove { color: #f0b09a; }
+.shelf-book-card__action--remove:hover { background: rgba(255,120,80,0.14); }
+.shelf-book-card__action--remove:active { background: rgba(255,120,80,0.22); }
+`;
 
 /* ---- Camera: fits full width, scrolls vertically ---- */
 
