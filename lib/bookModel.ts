@@ -192,31 +192,35 @@ const SPINE_PX_PER_REFERENCE_HEIGHT = 203;
 const REFERENCE_HEIGHT = 1200;
 
 /**
- * The spine isn't flat — book2.glb's binding bulges gently toward the
- * viewer along its width, and that bulge's midpoint sits physically closer
- * to the camera than a straight-line measurement between its two edges
- * would suggest. That reads as the spine's width being optically magnified
- * relative to its height, which is basically flat top to bottom and gets no
- * such boost. Confirmed with a plain painted-on circle: the 203/1200
- * pixel-density formula above matches this model's real measured geometry
- * to within 0.1% (so that's not it), and the same ~15-20% wide-not-tall
- * ratio held regardless of shelf position (including dead centre, where
- * camera perspective is symmetric) and regardless of the circle's size —
- * ruling out perspective and edge-clipping as the cause. What's left is the
- * curve itself, and it doesn't respond to shader math: it's the same
- * before and after correcting the mip-selection gradient (see
- * addSpineRemap), which changes blur, not which pixel gets sampled.
+ * REVERTED. The spine isn't flat — book2.glb's binding bulges gently
+ * toward the viewer along its width, and a controlled circle test showed a
+ * consistent ~15-20% wide-not-tall ratio that didn't respond to fixing the
+ * mip-selection gradient, and didn't depend on shelf position or circle
+ * size. Widening the sampled crop by a matching factor (this was 1.17)
+ * did make that circle round — but "wider crop" means literally reading
+ * pixels further from the spine's own centre, and every real cover file's
+ * back/front cover art starts immediately outside the spine's actual drawn
+ * width, at whatever content the artist put there. On Man's Search for
+ * Meaning specifically, the back cover has a pale, near-white background
+ * starting just past the true spine edge — 1.17x pushed the sample point
+ * about 5px past that edge into it, on a spine only ~112px wide to begin
+ * with, and rendered as a stark white bleed line along the whole spine.
+ * The circle test never caught this because the test file's own back/front
+ * "cover" content (flat tinted rectangles) had nothing near the boundary
+ * that would show a few pixels' difference.
  *
- * Correcting the geometry itself (re-exporting a flatter spine, or
- * measuring true arc length instead of straight-line distance) is the
- * first-principles fix; this is the pragmatic one — sample a
- * correspondingly wider slice of the file's own spine art so the extra
- * screen area the curve creates gets filled with real detail instead of
- * stretched-thin pixels. Tied to this specific model's specific curve, so
- * if book2.glb is ever re-exported with a flatter spine, re-measure with a
- * plain painted-on circle before assuming this is still right.
+ * Reading more source pixels than the file actually drew for the spine
+ * isn't fixable by tuning the factor — any nonzero widening reads into
+ * neighbouring content by construction, and different covers put
+ * different things there. Left at 1.0 (no-op) until a fix is found that
+ * doesn't require sampling past the drawn crop's own edges — e.g.
+ * correcting the destination band's shape instead of the source width, or
+ * fixing the curve in the geometry itself. The ~15-20% aspect imperfection
+ * this was compensating for is still open; see the tolerance/plateau
+ * discussion above measureSpineBand for the related, already-explored
+ * dead end on the geometry side.
  */
-const SPINE_CURVE_MAGNIFICATION = 1.17;
+const SPINE_CURVE_MAGNIFICATION = 1.0;
 
 function spineFractionOfWidth(
   imageWidth: number,
@@ -256,19 +260,37 @@ function spineFractionOfWidth(
 function addSpineRemap(
   mat: THREE.MeshStandardMaterial,
   band: { u1: number; u2: number },
-  spineFraction: number
+  spineFraction: number,
+  imageWidth: number
 ) {
   const f1 = 0.5 - spineFraction / 2;
   const f2 = 0.5 + spineFraction / 2;
+  // Ordinary bilinear filtering blends the couple of texels either side of
+  // wherever it samples — true at any mip level, nothing to do with the
+  // mip-selection fix above. f1/f2/0/1 aren't texture edges (ClampToEdge
+  // doesn't help here); they're seams *inside* one continuous image, so
+  // sampling right at one still blends in whatever's drawn just past it.
+  // Invisible on a plain background, but a real cover can — and does —
+  // put something bright right up against its own spine edge, and that
+  // blend reads as a thin bleed line. Insetting the clamp by a couple
+  // texels keeps every sample's filter kernel inside its own crop. This
+  // is not the margin bug #3 removed: that shrank the sampled window by a
+  // large fraction of its own width (5-25%) while the destination stayed
+  // full width, which zooms — a visible stretch, worst on anything round.
+  // A couple of texels out of a ~100+px-wide crop is a fraction of a
+  // percent, far below anything the eye can register as size.
+  const texel = 1 / imageWidth;
+  const inset = texel * 1.5;
 
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.spineRemap = {
       value: new THREE.Vector4(band.u1, band.u2, f1, f2),
     };
+    shader.uniforms.spineRemapInset = { value: inset };
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <map_pars_fragment>",
-        "#include <map_pars_fragment>\nuniform vec4 spineRemap;"
+        "#include <map_pars_fragment>\nuniform vec4 spineRemap;\nuniform float spineRemapInset;"
       )
       .replace(
         "#include <map_fragment>",
@@ -300,15 +322,16 @@ function addSpineRemap(
   float f2 = spineRemap.w;
   float slope;
   vec2 jacketUv = vMapUv;
+  float inset = spineRemapInset;
   if (u <= u1) {
     slope = f1 / u1;
-    jacketUv.x = u * slope;
+    jacketUv.x = clamp(u * slope, inset, f1 - inset);
   } else if (u <= u2) {
     slope = (f2 - f1) / (u2 - u1);
-    jacketUv.x = f1 + (u - u1) * slope;
+    jacketUv.x = clamp(f1 + (u - u1) * slope, f1 + inset, f2 - inset);
   } else {
     slope = (1.0 - f2) / (1.0 - u2);
-    jacketUv.x = f2 + (u - u2) * slope;
+    jacketUv.x = clamp(f2 + (u - u2) * slope, f2 + inset, 1.0 - inset);
   }
   vec2 gradX = dFdx(vMapUv) * vec2(slope, 1.0);
   vec2 gradY = dFdy(vMapUv) * vec2(slope, 1.0);
@@ -334,7 +357,7 @@ function makeCoverMaterial(
     const img = tex.image as { width?: number; height?: number } | undefined;
     if (img?.width && img.height) {
       const spineFraction = spineFractionOfWidth(img.width, img.height, spineScale);
-      addSpineRemap(mat, spineBand, spineFraction);
+      addSpineRemap(mat, spineBand, spineFraction, img.width);
     }
   }
 

@@ -243,17 +243,63 @@ touched it.
 
 The first-principles fix would be re-exporting a flatter spine, or
 measuring true arc length instead of straight-line distance. The pragmatic
-one, and the one shipped here: sample a correspondingly wider slice of the
-file's own spine art, so the extra screen area the curve creates gets
-filled with real detail instead of the same pixels stretched thinner.
-`SPINE_CURVE_MAGNIFICATION` in `lib/bookModel.ts` is that correction —
-`1.17`, calibrated directly against the circle test, not derived from
-first principles. Confirmed afterward: the circle renders at exactly 1:1
-width-to-height, both dead centre and at the shelf's default angle, and
-the real cover's logo mark reads as a circle again. It's tied to this
-specific model's specific curve — if book2.glb is ever re-exported with a
-flatter spine, re-measure with a plain painted-on circle before assuming
-`1.17` is still right.
+attempt was to sample a correspondingly wider slice of the file's own
+spine art instead, so the extra screen area the curve creates gets filled
+with real detail instead of the same pixels stretched thinner —
+`SPINE_CURVE_MAGNIFICATION`, calibrated at `1.17` directly against the
+circle test. It worked, for that test: the circle rendered at exactly 1:1,
+dead centre and at the shelf's default angle. It did not survive contact
+with a real cover — see bug #6.
+
+## 10. Bug #6: the "wider crop" fix read past the file's own edge
+
+`SPINE_CURVE_MAGNIFICATION` sampled a wider slice of the file for the
+spine — which means, concretely, reading pixels further from the spine's
+own centre than the file was actually built with a spine at. The circle
+test's own back and front "cover" content was flat tinted rectangles, so
+reading a bit further into them was invisible. A real cover's back and
+front cover art is a photograph, an illustration, whatever the artist
+drew — and it starts immediately outside the spine's true drawn width, at
+whatever that happens to be.
+
+On Man's Search for Meaning, the back cover has a pale, near-white
+background right up against the spine — and `1.17` pushed the sample
+point about 5px past the true edge into it, on a spine only ~112px wide
+to begin with. Rendered on the shelf, that read as a stark white line
+running the full height of the spine, worst around the shelf's more
+oblique viewing angles where the eye naturally goes looking for exactly
+this kind of seam. Checked directly against the file's own pixels: flat
+lavender-white (230, 229, 243) until x=916, dark jacket blue (51, 54, 121)
+from x=918 — a 2px transition — while the corrected formula's own crop
+boundary landed at x≈912, five pixels into the pale side of that line.
+
+This isn't a tuning problem — no value of `SPINE_CURVE_MAGNIFICATION`
+above `1.0` avoids it in general, because widening the source crop by
+construction reads into whatever the neighbouring panel's art happens to
+put near its own edge, and that's different for every cover. Reverted to
+`1.0` (a no-op) rather than shipped at a "safer" smaller value that would
+still fail on some future cover with even less margin. The curve-induced
+~15-20% aspect imperfection this was compensating for is still open;
+fixing it for real needs a way to gain sampling density without reading
+past the drawn crop's own boundary — correcting the destination band's
+shape instead of the source width, most likely, rather than anything on
+the pixel-reading side.
+
+One real fix came out of chasing this down anyway: `addSpineRemap`'s
+piecewise remap can put `jacketUv.x` arbitrarily close to `f1`/`f2`/`0`/`1`
+— the seams between crops — and ordinary bilinear filtering blends in a
+texel or two from whatever's just past wherever it samples, regardless of
+mip level. `ClampToEdgeWrapping` only guards the texture's outer edges
+(`0`/`1`); it does nothing for `f1`/`f2`, which are seams *inside* one
+continuous image. Insetting the clamp by 1.5 texels keeps every sample's
+filter kernel inside its own crop. This isn't bug #3's margin again —
+that shrank the sampled window by a large fraction of its own width
+(5-25%) while the destination stayed full width, which zooms and
+stretches anything round. A texel and a half out of a 100+px-wide crop is
+a small fraction of a percent, far below anything the eye registers as
+size — it didn't cause bug #6 (that was the 1.17 widening, not this), and
+it stays in as a real, separate correctness fix for actual bilinear bleed
+at the seams.
 
 ## The full picture, for a calibrated book
 
@@ -268,6 +314,13 @@ flatter spine, re-measure with a plain painted-on circle before assuming
 5. That spine boundary is itself measured in the model's own intrinsic
    frame — relative to root, not full-scene world space — so it doesn't
    drift with a book's thickness or shelf position (bug #4's fix).
+6. Every sample stays a texel and a half inside its own crop, so ordinary
+   bilinear filtering can't blend in whatever the neighbouring panel's art
+   happens to put near the seam (bug #6's fix) — but the crop itself is
+   never widened past what the file actually drew for it, even though the
+   spine's real curve still leaves a small, open aspect imperfection
+   (bug #5/#6, reverted rather than shipped a fix that reads past the
+   file's own edge).
 
 For every other book, none of that runs — it's the same plain texture
 stretch the app always used, waiting for its own cover to be rebuilt the
