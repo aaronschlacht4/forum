@@ -243,35 +243,44 @@ function addSpineRemap(
         "#include <map_fragment>",
         /* glsl */ `
 #ifdef USE_MAP
-  // The screen-space derivative of the ORIGINAL uv, before the remap below —
-  // taken here because it's smooth and continuous across the whole mesh, the
-  // way an ordinary UV mapping is. The remap is piecewise (three different
-  // linear pieces stitched at u1 and u2), so its own derivative jumps at
-  // those seams; letting the GPU's automatic mip selection differentiate the
-  // *remapped* coordinate reads that jump as "this texture is changing very
-  // fast right here" and picks a far blurrier mip than the image actually
-  // needs, smearing neighbouring cover art into a band around the seam far
-  // wider than the couple of texels ordinary filtering would blur. Sampling
-  // with this pre-remap gradient instead keeps the mip selection tied to how
-  // fast the surface is actually foreshortening, not to an artifact of the
-  // remap's own math. Scaled down a touch beyond that: still no wider a mip
-  // than the true foreshortening calls for, only sharper, so this only ever
-  // sharpens the seam — it can't widen it back out the way the old margin
-  // did, because it never moves which pixel jacketUv lands on, only how
-  // blurred that pixel is allowed to look.
-  vec2 gradX = dFdx(vMapUv) * 0.6;
-  vec2 gradY = dFdy(vMapUv) * 0.6;
+  // textureGrad needs the screen-space derivative of the coordinate it's
+  // actually sampling — jacketUv, not vMapUv. jacketUv's remap only ever
+  // touches .x, and is piecewise linear in it, so d(jacketUv.x)/d(vMapUv.x)
+  // is just that segment's own slope (only .x scales; .y passes through
+  // untouched, so its derivative is already correct as-is). An earlier
+  // version sampled vMapUv's own derivative directly — smooth and
+  // continuous, unlike jacketUv's, which jumps at the u1/u2 seams and once
+  // read as blurrier mips than the surface's real foreshortening called
+  // for — then applied one flat scale (0.6, tuned by eye) to both axes to
+  // pull that back. But only .x needed correcting at all; scaling .y by
+  // the same flat factor threw away real detail in the untouched
+  // direction for no reason, and scaling .x by a fixed constant instead of
+  // this book's own real slope left it wrong by however far 0.6 happened
+  // to differ from that book's true ratio — under-correcting on some
+  // covers, over- on others. A narrow spine's true slope is well under 1
+  // (a wide swing in vMapUv.x lands on a narrow band of jacketUv.x), so
+  // this is still always a sharpening relative to naive automatic mip
+  // selection on the remapped coordinate — just the exact amount this
+  // book's own crop calls for, not a guess shared by every book.
+  float u  = vMapUv.x;
+  float u1 = spineRemap.x;
+  float u2 = spineRemap.y;
+  float f1 = spineRemap.z;
+  float f2 = spineRemap.w;
+  float slope;
   vec2 jacketUv = vMapUv;
-  {
-    float u1 = spineRemap.x;
-    float u2 = spineRemap.y;
-    float f1 = spineRemap.z;
-    float f2 = spineRemap.w;
-    float u  = jacketUv.x;
-    if (u <= u1)      jacketUv.x = (u / u1) * f1;
-    else if (u <= u2) jacketUv.x = f1 + ((u - u1) / (u2 - u1)) * (f2 - f1);
-    else              jacketUv.x = f2 + ((u - u2) / (1.0 - u2)) * (1.0 - f2);
+  if (u <= u1) {
+    slope = f1 / u1;
+    jacketUv.x = u * slope;
+  } else if (u <= u2) {
+    slope = (f2 - f1) / (u2 - u1);
+    jacketUv.x = f1 + (u - u1) * slope;
+  } else {
+    slope = (1.0 - f2) / (1.0 - u2);
+    jacketUv.x = f2 + (u - u2) * slope;
   }
+  vec2 gradX = dFdx(vMapUv) * vec2(slope, 1.0);
+  vec2 gradY = dFdy(vMapUv) * vec2(slope, 1.0);
   vec4 sampledDiffuseColor = textureGrad( map, jacketUv, gradX, gradY );
   diffuseColor *= sampledDiffuseColor;
 #endif
