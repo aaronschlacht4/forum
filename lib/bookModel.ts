@@ -191,12 +191,43 @@ export function measureSpineBand(
 const SPINE_PX_PER_REFERENCE_HEIGHT = 203;
 const REFERENCE_HEIGHT = 1200;
 
+/**
+ * The spine isn't flat — book2.glb's binding bulges gently toward the
+ * viewer along its width, and that bulge's midpoint sits physically closer
+ * to the camera than a straight-line measurement between its two edges
+ * would suggest. That reads as the spine's width being optically magnified
+ * relative to its height, which is basically flat top to bottom and gets no
+ * such boost. Confirmed with a plain painted-on circle: the 203/1200
+ * pixel-density formula above matches this model's real measured geometry
+ * to within 0.1% (so that's not it), and the same ~15-20% wide-not-tall
+ * ratio held regardless of shelf position (including dead centre, where
+ * camera perspective is symmetric) and regardless of the circle's size —
+ * ruling out perspective and edge-clipping as the cause. What's left is the
+ * curve itself, and it doesn't respond to shader math: it's the same
+ * before and after correcting the mip-selection gradient (see
+ * addSpineRemap), which changes blur, not which pixel gets sampled.
+ *
+ * Correcting the geometry itself (re-exporting a flatter spine, or
+ * measuring true arc length instead of straight-line distance) is the
+ * first-principles fix; this is the pragmatic one — sample a
+ * correspondingly wider slice of the file's own spine art so the extra
+ * screen area the curve creates gets filled with real detail instead of
+ * stretched-thin pixels. Tied to this specific model's specific curve, so
+ * if book2.glb is ever re-exported with a flatter spine, re-measure with a
+ * plain painted-on circle before assuming this is still right.
+ */
+const SPINE_CURVE_MAGNIFICATION = 1.17;
+
 function spineFractionOfWidth(
   imageWidth: number,
   imageHeight: number,
   thickness: number
 ): number {
-  const spinePx = SPINE_PX_PER_REFERENCE_HEIGHT * thickness * (imageHeight / REFERENCE_HEIGHT);
+  const spinePx =
+    SPINE_PX_PER_REFERENCE_HEIGHT *
+    SPINE_CURVE_MAGNIFICATION *
+    thickness *
+    (imageHeight / REFERENCE_HEIGHT);
   return spinePx / imageWidth;
 }
 

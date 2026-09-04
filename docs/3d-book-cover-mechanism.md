@@ -209,6 +209,52 @@ controlled circle test: it now measures round to within the noise of the
 spine's own lighting gradient, both dead-on and at an angle, and the real
 cover's logo mark reads as a circle again instead of an ellipse.
 
+## 9. Bug #5: the spine isn't flat, and no shader math fixes that
+
+Bug #4 fixed the measurement, and it fixed most of the stretch — but a
+controlled circle painted onto the spine still came back a consistent
+~15-20% wider than tall, in every test: dead centre in the camera's view
+(where perspective is symmetric and shouldn't skew anything), off to the
+shelf's edge, and across circles of several different sizes safely inside
+the spine's width. Nothing about *where* you looked at it or *how big* the
+circle was moved that number — which ruled out camera perspective and
+edge-clipping as the cause.
+
+It also wasn't the mip-selection math from bug #2. That fix had used one
+flat, eyeballed scale (`× 0.6`) on both the U and V gradients fed to
+`textureGrad`, when only U is actually remapped — V passes through
+untouched and never needed correcting at all. Replacing that flat guess
+with the remap's own real local slope (computed directly, not tuned by
+eye) is a genuine correctness fix on its own, and it's still worth having
+— but re-running the circle test with it made zero measurable difference,
+pixel for pixel. Whatever was stretching the circle wasn't blur.
+
+Measuring the actual rendered geometry settled it: the spine crop's real
+on-screen width, compared against the jacket's real on-screen height, and
+the pixel-density formula sizing the crop, agreed with each other to
+within 0.1%. The *sampling math was correct*. What's left is the model
+itself — book2.glb's spine isn't a flat plane, it bulges gently toward the
+viewer, and a bulge's midpoint sits physically closer to the camera than a
+straight-line measurement between its two edges suggests. That reads as
+extra magnification along the spine's width specifically, since its height
+is basically flat and gets no such boost. It's a property of the curve,
+not of any texture math, which is exactly why no amount of shader tuning
+touched it.
+
+The first-principles fix would be re-exporting a flatter spine, or
+measuring true arc length instead of straight-line distance. The pragmatic
+one, and the one shipped here: sample a correspondingly wider slice of the
+file's own spine art, so the extra screen area the curve creates gets
+filled with real detail instead of the same pixels stretched thinner.
+`SPINE_CURVE_MAGNIFICATION` in `lib/bookModel.ts` is that correction —
+`1.17`, calibrated directly against the circle test, not derived from
+first principles. Confirmed afterward: the circle renders at exactly 1:1
+width-to-height, both dead centre and at the shelf's default angle, and
+the real cover's logo mark reads as a circle again. It's tied to this
+specific model's specific curve — if book2.glb is ever re-exported with a
+flatter spine, re-measure with a plain painted-on circle before assuming
+`1.17` is still right.
+
 ## The full picture, for a calibrated book
 
 1. Geometry is scaled by `thickness`, computed from page count.

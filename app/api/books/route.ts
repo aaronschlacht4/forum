@@ -14,6 +14,10 @@ type BookRow = {
   page_count?: number | null;
   // Absent entirely until sql-migrations/12-add-cover-calibrated.sql has run.
   cover_calibrated?: boolean;
+  // Absent entirely until sql-migrations/13-add-cover-metrics.sql has run,
+  // and null until scripts/backfill-cover-metrics.mjs has computed them.
+  cover_aspect_ratio?: number | null;
+  cover_spine_px?: number | null;
 };
 
 export async function GET(req: Request) {
@@ -29,6 +33,7 @@ export async function GET(req: Request) {
     // ShelvesNotSetUpError in lib/library.ts for the same pattern), and the
     // catalogue has to keep working regardless of exactly where things stand.
     const selects = [
+      "id,title,author,pdf_path,cover_path,page_count,cover_calibrated,cover_aspect_ratio,cover_spine_px",
       "id,title,author,pdf_path,cover_path,page_count,cover_calibrated",
       "id,title,author,pdf_path,cover_path,page_count",
       "id,title,author,pdf_path,cover_path",
@@ -76,6 +81,8 @@ export async function GET(req: Request) {
           cover_path: b.cover_path,
           pageCount: b.page_count,
           coverCalibrated: b.cover_calibrated ?? false,
+          coverAspectRatio: b.cover_aspect_ratio ?? null,
+          coverSpinePx: b.cover_spine_px ?? null,
         };
       })
     );
