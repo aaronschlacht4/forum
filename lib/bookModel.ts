@@ -155,18 +155,47 @@ export function measureSpineBand(
 }
 
 /**
+ * The spine crop's width as a fraction of the file's own real width — read
+ * off the file itself, not assumed from a reference size.
+ *
+ * The formula (see BOOK_MODEL_URL's own doc comment) is "203px of spine per
+ * 1200px of height, times the book's thickness factor" — a size, not a
+ * fraction, so it has to be measured against whatever height *this* file
+ * actually is before it means anything as a fraction of its width. A file
+ * built a few pixels off that formula, or at a different resolution
+ * entirely, still centres its spine correctly this way; only the file's own
+ * dimensions and the thickness number matter, nothing assumed about the
+ * file's total size.
+ */
+const SPINE_PX_PER_REFERENCE_HEIGHT = 203;
+const REFERENCE_HEIGHT = 1200;
+
+function spineFractionOfWidth(
+  imageWidth: number,
+  imageHeight: number,
+  thickness: number
+): number {
+  const spinePx = SPINE_PX_PER_REFERENCE_HEIGHT * thickness * (imageHeight / REFERENCE_HEIGHT);
+  return spinePx / imageWidth;
+}
+
+/**
  * Sample the cover at the file's own panel proportions instead of the mesh's.
  *
  * The mesh's UV strip divides back/spine/front at fixed fractions, sized for
  * a book at default thickness. A book's spine geometry, though, is scaled by
- * its page count — so a cover file drawn with its spine at `s·t` of the width
- * (the honest proportions of *that* book) would render smeared: the mesh
- * would stretch the file's fixed-fraction spine slice across the scaled face.
+ * its page count — so a cover file drawn with its spine at the honest
+ * proportions of *that* book would render smeared: the mesh would stretch
+ * the file's fixed-fraction spine slice across the scaled face.
  *
  * This remaps U in the fragment shader: the mesh's fixed bands are projected
- * onto the file laid out as [cover | spine·t | cover], so each face samples
- * exactly the pixels drawn for it, at matching density. At t = 1 the remap is
- * the identity and fixed-proportion files behave as before.
+ * onto the file's own three crops — the spine taken from dead centre, at
+ * `spineFraction` of the file's width, and back/front from what's left on
+ * either side — so each face samples exactly the pixels drawn for it, at
+ * matching density. No margin is taken off any of the three crops: shrinking
+ * only the sampled width while the rendered geometry stays full width is a
+ * horizontal-only zoom, and stretches anything circular into an ellipse —
+ * most visible on the small logo mark, which is what it's named for below.
  *
  * Only called for a cover actually built to these proportions (see the
  * `calibrated` guard around this in applyCoverTexture) — carving up a cover
@@ -175,16 +204,19 @@ export function measureSpineBand(
 function addSpineRemap(
   mat: THREE.MeshStandardMaterial,
   band: { u1: number; u2: number },
-  thickness: number
+  spineFraction: number
 ) {
+  const f1 = 0.5 - spineFraction / 2;
+  const f2 = 0.5 + spineFraction / 2;
+
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.spineRemap = {
-      value: new THREE.Vector3(band.u1, band.u2, thickness),
+      value: new THREE.Vector4(band.u1, band.u2, f1, f2),
     };
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <map_pars_fragment>",
-        "#include <map_pars_fragment>\nuniform vec3 spineRemap;"
+        "#include <map_pars_fragment>\nuniform vec4 spineRemap;"
       )
       .replace(
         "#include <map_fragment>",
@@ -201,26 +233,22 @@ function addSpineRemap(
   // wider than the couple of texels ordinary filtering would blur. Sampling
   // with this pre-remap gradient instead keeps the mip selection tied to how
   // fast the surface is actually foreshortening, not to an artifact of the
-  // remap's own math.
-  vec2 gradX = dFdx(vMapUv);
-  vec2 gradY = dFdy(vMapUv);
+  // remap's own math. Scaled down a touch beyond that: still no wider a mip
+  // than the true foreshortening calls for, only sharper, so this only ever
+  // sharpens the seam — it can't widen it back out the way the old margin
+  // did, because it never moves which pixel jacketUv lands on, only how
+  // blurred that pixel is allowed to look.
+  vec2 gradX = dFdx(vMapUv) * 0.6;
+  vec2 gradY = dFdy(vMapUv) * 0.6;
   vec2 jacketUv = vMapUv;
   {
     float u1 = spineRemap.x;
     float u2 = spineRemap.y;
-    float t  = spineRemap.z;
-    float T  = u1 + (u2 - u1) * t + (1.0 - u2);
-    float f1 = u1 / T;
-    float f2 = (u1 + (u2 - u1) * t) / T;
-    // Belt and braces on top of the explicit gradient above: still leaves a
-    // small buffer inside [f1, f2] for whatever ordinary filtering blur is
-    // left once the mip-selection artifact above is gone.
-    float margin = (f2 - f1) * 0.12;
-    float g1 = f1 + margin;
-    float g2 = f2 - margin;
+    float f1 = spineRemap.z;
+    float f2 = spineRemap.w;
     float u  = jacketUv.x;
     if (u <= u1)      jacketUv.x = (u / u1) * f1;
-    else if (u <= u2) jacketUv.x = g1 + ((u - u1) / (u2 - u1)) * (g2 - g1);
+    else if (u <= u2) jacketUv.x = f1 + ((u - u1) / (u2 - u1)) * (f2 - f1);
     else              jacketUv.x = f2 + ((u - u2) / (1.0 - u2)) * (1.0 - f2);
   }
   vec4 sampledDiffuseColor = textureGrad( map, jacketUv, gradX, gradY );
@@ -241,7 +269,13 @@ function makeCoverMaterial(
   const mat = source.clone() as THREE.MeshStandardMaterial;
   mat.map = tex;
   mat.color?.set(0xffffff);
-  if (spineBand) addSpineRemap(mat, spineBand, spineScale);
+  if (spineBand) {
+    const img = tex.image as { width?: number; height?: number } | undefined;
+    if (img?.width && img.height) {
+      const spineFraction = spineFractionOfWidth(img.width, img.height, spineScale);
+      addSpineRemap(mat, spineBand, spineFraction);
+    }
+  }
 
   // Every other map on this material was baked from the cover art the model
   // shipped with — book2.glb even points normalMap and roughnessMap at the same
