@@ -1,0 +1,149 @@
+# The 3D book cover mechanism
+
+Notes on how covers actually get onto the 3D shelf model, why a cover has to
+be built a specific way to look right, and the two rendering bugs Claude and
+I chased down and fixed while getting Man's Search for Meaning's cover
+working. Keeping this in the repo so the next time a cover looks wrong, or
+the next book gets rebuilt, the reasoning doesn't have to be rediscovered
+from scratch.
+
+Examples throughout use the two books we actually tested this against:
+**Man's Search for Meaning** (69 pages, the thinnest book on the shelf) and
+**Crime and Punishment** (767 pages, the thickest).
+
+## 1. One 3D model, reused for every book
+
+Every book on the shelf is the same `book2.glb` model, cloned and dressed
+differently per book. Its jacket — back cover, spine, front cover — is one
+continuous mesh, not three separate pieces. Every point on that surface
+carries a UV coordinate from 0 to 1, and the model has always divided that
+strip the same way, baked in at export time:
+
+```
+U = 0 ────────── 0.44 ── 0.56 ────────── 1.0
+      back cover    |  spine |   front cover
+```
+
+Whatever image gets uploaded as a cover is stretched across that entire
+strip. A plain front-cover photo, uploaded without understanding this, has
+its middle — the part meant to sit under someone's thumb — smeared across
+the spine. That's why the model always needed wraparound art, not a front
+cover crop.
+
+## 2. Making thin books look thin: geometry, not texture
+
+Before any of this, every book rendered at the same spine width regardless
+of length. Earlier in the project I had Claude scale each book's geometry
+along the "along-the-shelf" axis by a `thickness` factor derived from its
+real page count:
+
+```
+thickness = clamp(√(pageCount / 300), 0.55, 1.7)
+
+MSFM (69 pages):   √(69/300)  = 0.48  → clamped to 0.55 (the floor)
+Crime & P. (767):  √(767/300) = 1.60
+```
+
+This part is pure 3D geometry. MSFM's spine face is squeezed to 55% of the
+reference width; Crime and Punishment's is stretched to 160%. Nothing about
+the *image* changes at this point — the model just physically renders wider
+or narrower.
+
+## 3. The problem that created
+
+The mesh's UV split (0.44–0.56 for the spine) never moves — it's baked into
+the geometry, independent of any runtime scaling. So MSFM's spine geometry
+is squeezed to 55% width, but it's still sampling the exact same middle 12%
+slice of whatever image is uploaded. That fixed slice of pixels, crammed
+into less physical space, reads as squashed. Crime and Punishment's spine,
+stretched to 160% width, samples that same fixed slice and reads as smeared
+thin. Neither book's cover art was drawn expecting this, so both looked
+wrong once thickness started varying by book.
+
+## 4. The fix: build the file at the book's own proportions, and remap to match
+
+The real fix has two halves, and they only work if they agree with each
+other.
+
+**Half A — the file.** Instead of one fixed layout for every book, each
+cover now gets built with its spine sized to *that* book's own thickness:
+
+```
+coverWidth = 921px (fixed, every book)
+spineWidth = 203px × thickness
+
+MSFM:        203 × 0.55 = 112px  →  file is 1954×1200, spine at 921–1033px
+Crime & P.:  203 × 1.60 = 325px  →  file is 2167×1200, spine at 921–1246px
+```
+
+**Half B — the shader.** A file built this way no longer matches the mesh's
+fixed 0.44–0.56 split, so Claude added a custom fragment shader that remaps
+the sampling coordinate at render time: it takes the mesh's fixed spine
+band and projects it onto wherever the file's own spine actually sits,
+computed from that same thickness number. At thickness = 1 this remap is
+mathematically a no-op — a fixed-proportion file behaves exactly like it
+always did. At MSFM's thickness of 0.55, it samples exactly the 112px band
+the file was actually drawn with, not the mesh's generic 12%.
+
+This remap only runs for a book explicitly flagged `cover_calibrated =
+true` in the `books` table. Every other book — Crime and Punishment's
+current cover included, which is still just a plain front-cover photo, not
+built to this convention at all — skips the remap entirely and renders
+exactly as it always did. That flag exists specifically so a half-migrated
+catalogue doesn't get its ordinary covers carved up along boundaries that
+mean nothing in their actual files. (This is what caused Moby Dick's spine
+to briefly read "ELVIL" instead of "MELVILLE" — the remap running on a
+cover it was never built for.)
+
+## 5. Bug #1: measuring the wrong slice of geometry
+
+The shader needs to know exactly where on the mesh the spine band sits.
+Claude measured this by finding the model's vertices sitting on its
+flattest, most spine-like surface. But the spine isn't perfectly flat — it
+curves gently into the front and back covers at a rounded edge, and that
+curved rim is still facing the camera on a shelf. The first measurement
+only captured the dead-flat center, so the curved edges technically had UV
+values *outside* the measured range — meaning they skipped the remap
+entirely and sampled straight from the unmodified cover formula, which is
+exactly where cover art leaked onto what visually reads as spine.
+
+Fixed by widening that measurement to properly include the curve — found by
+sweeping the tolerance from 5% up to 50% and watching where the numbers
+stopped changing. They plateau at 10%; the shipped value is 20%, inside
+that plateau with room either side.
+
+## 6. Bug #2: tricking the GPU's own blur
+
+Even with the boundary measured correctly, the real photo still showed a
+wide smear that a plain solid-color test Claude built to check the math
+never revealed. The reason: the remap is three straight-line segments
+stitched together, and its *rate of change* jumps abruptly right at each
+seam. GPUs use exactly that rate of change to decide how blurry a mipmap
+level to sample from — a sudden jump reads as "this texture is changing
+very fast right here," so it grabbed a far blurrier level than the
+surface's actual geometry called for, smearing real detail from
+neighboring image content across a band much wider than ordinary filtering
+ever would. A flat solid color hides this almost completely, which is
+exactly why the labelled test kept passing while the real photo — with
+vivid sunset detail sitting right next to flat blue — kept failing.
+
+The fix: compute that blur amount from the *original*, smooth coordinate
+before any remapping happens, and hand it to the GPU explicitly
+(`textureGrad`) instead of letting it guess from the already-distorted
+remapped one.
+
+## The full picture, for a calibrated book
+
+1. Geometry is scaled by `thickness`, computed from page count.
+2. The shader remaps the sample window to match that same `thickness`.
+3. That remap is measured against the true, curve-inclusive spine boundary
+   (bug #1's fix).
+4. The GPU blurs using the real, undistorted rate of change rather than an
+   artifact of the remap's own math (bug #2's fix).
+
+For every other book, none of that runs — it's the same plain texture
+stretch the app always used, waiting for its own cover to be rebuilt the
+same way MSFM's was: `2 × 921px` covers, spine width `= 203px × thickness`,
+`cover_calibrated` flipped to `true` once the file is uploaded.
+
+— Aaron, with Claude
