@@ -279,8 +279,13 @@ function addSpineRemap(
   // full width, which zooms — a visible stretch, worst on anything round.
   // A couple of texels out of a ~100+px-wide crop is a fraction of a
   // percent, far below anything the eye can register as size.
+  // 8 texels rather than the bare bilinear minimum: the gradient cap below
+  // still admits filter footprints a dozen-odd texels wide at the grazing
+  // silhouette, and the inset has to keep most of that kernel inside its own
+  // crop. Still a clamp, not a rescale — no zoom — and 8 texels off the edge
+  // of a ~100+px crop is invisible at any ordinary viewing angle.
   const texel = 1 / imageWidth;
-  const inset = texel * 1.5;
+  const inset = texel * 8.0;
 
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.spineRemap = {
@@ -323,10 +328,22 @@ function addSpineRemap(
   float slope;
   vec2 jacketUv = vMapUv;
   float inset = spineRemapInset;
-  if (u <= u1) {
+  // At a grazing silhouette the whole curved rim goes edge-on and a couple
+  // of screen pixels sweep across a tenth of the U strip — a pixel whose
+  // centre's u lands just outside the spine band still *covers* it, and the
+  // eye reads that pixel as spine edge. Resolve those ambiguous pixels to
+  // the spine: widen the spine branch's classification window by how much u
+  // actually changes across this pixel (the screen-space derivative), so an
+  // edge-on pixel straddling the seam samples spine, never the neighbouring
+  // cover's art. Face-on, u moves ~a thousandth per pixel, so the widening
+  // is a fraction of one screen pixel — nothing like the flat rim buffer
+  // that ate a third of each cover face. Capped so a degenerate derivative
+  // can never push the window into genuinely face-on cover territory.
+  float rim = min(length(vec2(dFdx(u), dFdy(u))) * 2.0, 0.15);
+  if (u <= u1 - rim) {
     slope = f1 / u1;
     jacketUv.x = clamp(u * slope, inset, f1 - inset);
-  } else if (u <= u2) {
+  } else if (u <= u2 + rim) {
     slope = (f2 - f1) / (u2 - u1);
     jacketUv.x = clamp(f1 + (u - u1) * slope, f1 + inset, f2 - inset);
   } else {
@@ -335,6 +352,18 @@ function addSpineRemap(
   }
   vec2 gradX = dFdx(vMapUv) * vec2(slope, 1.0);
   vec2 gradY = dFdy(vMapUv) * vec2(slope, 1.0);
+  // Those same exploding silhouette derivatives, fed to textureGrad, select
+  // a mip so blurry its footprint blends far across the crop seams no
+  // matter where the sample point sits — the inset clamp can't outrun it.
+  // Cap the gradient length: 0.01 of the texture (~a 4th-5th mip) is more
+  // than any ordinary viewing angle produces, so only the degenerate
+  // edge-on pixels are affected, and they trade unbounded cross-seam blur
+  // for a slightly sharper sample from inside the right crop.
+  float gradCap = 0.01;
+  float gxLen = length(gradX);
+  if (gxLen > gradCap) gradX *= gradCap / gxLen;
+  float gyLen = length(gradY);
+  if (gyLen > gradCap) gradY *= gradCap / gyLen;
   vec4 sampledDiffuseColor = textureGrad( map, jacketUv, gradX, gradY );
   diffuseColor *= sampledDiffuseColor;
 #endif
