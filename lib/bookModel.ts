@@ -112,9 +112,26 @@ let warnedNoJacketMaterial = false;
 export function measureSpineBand(
   root: THREE.Object3D
 ): { u1: number; u2: number } | null {
+  // Relative to root, not full-scene world space. A mesh's own vertex data
+  // is only meaningful once carried through whatever transform its node has
+  // relative to root — but by the time this runs, root (bookRoot) is
+  // already parented under a wrapper carrying its own yaw, its non-uniform
+  // thickness scale, and wherever it's been placed on the shelf. Using
+  // mesh.matrixWorld directly pulled all of that in too, so this measured a
+  // different, per-instance-distorted band each time instead of the model's
+  // one true, intrinsic band — and disagreed with book.size, which
+  // measureBookBody computes on a bare, unattached clone before any of that
+  // exists. Inverting root's own matrixWorld out of the product cancels
+  // everything above root — wrapper rotation, thickness scale, shelf
+  // position — leaving exactly the internal node-to-node transform
+  // book.size was measured in.
+  root.updateMatrixWorld(true);
+  const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+
   let minX = Infinity;
   let maxX = -Infinity;
   const jackets: THREE.Mesh[] = [];
+  const v = new THREE.Vector3();
 
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -122,10 +139,12 @@ export function measureSpineBand(
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     if (!mats.some((m) => m && JACKET_MATERIAL_PATTERN.test(m.name ?? ""))) return;
     jackets.push(mesh);
+    const rel = new THREE.Matrix4().multiplyMatrices(toRoot, mesh.matrixWorld);
     const pos = mesh.geometry.getAttribute("position");
     for (let i = 0; i < pos.count; i++) {
-      minX = Math.min(minX, pos.getX(i));
-      maxX = Math.max(maxX, pos.getX(i));
+      v.fromBufferAttribute(pos, i).applyMatrix4(rel);
+      minX = Math.min(minX, v.x);
+      maxX = Math.max(maxX, v.x);
     }
   });
   if (!jackets.length || !Number.isFinite(minX)) return null;
@@ -142,11 +161,13 @@ export function measureSpineBand(
   let u1 = Infinity;
   let u2 = -Infinity;
   for (const mesh of jackets) {
+    const rel = new THREE.Matrix4().multiplyMatrices(toRoot, mesh.matrixWorld);
     const pos = mesh.geometry.getAttribute("position");
     const uv = mesh.geometry.getAttribute("uv");
     if (!uv) continue;
     for (let i = 0; i < pos.count; i++) {
-      if (pos.getX(i) > minX + tolerance) continue;
+      v.fromBufferAttribute(pos, i).applyMatrix4(rel);
+      if (v.x > minX + tolerance) continue;
       u1 = Math.min(u1, uv.getX(i));
       u2 = Math.max(u2, uv.getX(i));
     }

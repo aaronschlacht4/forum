@@ -171,6 +171,44 @@ pixel gets sampled* — it can only ever narrow the blur, never reintroduce
 the margin's zoom, because it never touches the sampling coordinate at
 all.
 
+## 8. Bug #4: measuring the mesh after it had already been moved
+
+Bug #3's fix removed the margin, and the seam bled cleanly on a plain test
+image. But a real cover still came back stretched — this time reproducibly,
+not just on one logo. A controlled solid-colour circle, painted onto the
+spine as a stand-in for the logo, measured as a visibly wide ellipse in one
+view and, confusingly, a *tall* ellipse in another. Something more basic
+than any of the first three bugs was still wrong.
+
+`measureSpineBand` finds the spine's UV boundary by looking at which
+vertices sit on the model's flattest, most spine-like plane. To compare
+those vertices meaningfully it has to carry them through whatever transform
+the mesh's node has — the same reasoning as `book.size`, which
+`measureBookBody` gets right by using `Box3.setFromObject` (always
+world-space). Making `measureSpineBand` match that seemed like the fix, and
+made the numbers move, but they still didn't agree with `book.size`.
+
+The reason: by the time `measureSpineBand` runs, `root` (the clone this
+book renders from) is no longer sitting where `measureBookBody` measured
+it. It's already a child of a wrapper carrying that book's own yaw, its
+non-uniform `thickness` scale, and wherever it landed on the shelf. Full
+scene world space includes all of that — so the "spine boundary" being
+measured shifted depending on the book's thickness and which shelf slot it
+was in, while `book.size` was measured earlier, on a bare, freshly cloned
+root with none of it applied yet. Two different coordinate frames, again —
+just one level removed from bug #1's version of the same mistake.
+
+The fix isn't world space or local space — it's root space: every vertex
+carried through `mesh.matrixWorld`, then through `root.matrixWorld`
+inverted, which cancels out exactly the part that isn't intrinsic to the
+model (the wrapper's rotation, its thickness scale, its shelf position) and
+leaves only the internal node-to-node transform between root and the
+jacket mesh. That's the same frame `measureBookBody` sees, because it also
+runs before any of those outer transforms exist. Confirmed against the
+controlled circle test: it now measures round to within the noise of the
+spine's own lighting gradient, both dead-on and at an angle, and the real
+cover's logo mark reads as a circle again instead of an ellipse.
+
 ## The full picture, for a calibrated book
 
 1. Geometry is scaled by `thickness`, computed from page count.
@@ -181,6 +219,9 @@ all.
 4. The GPU blurs using the real, undistorted rate of change, biased a
    little sharper, rather than an artifact of the remap's own math (bug
    #2's fix) — and never by sampling a narrower window, so nothing stretches.
+5. That spine boundary is itself measured in the model's own intrinsic
+   frame — relative to root, not full-scene world space — so it doesn't
+   drift with a book's thickness or shelf position (bug #4's fix).
 
 For every other book, none of that runs — it's the same plain texture
 stretch the app always used, waiting for its own cover to be rebuilt the
