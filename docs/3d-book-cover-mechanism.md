@@ -301,6 +301,46 @@ size — it didn't cause bug #6 (that was the 1.17 widening, not this), and
 it stays in as a real, separate correctness fix for actual bilinear bleed
 at the seams.
 
+## 11. Bug #5, solved for real: distribute the crop by projection, not by surface
+
+Bug #6's revert left the right question on the table: gain sampling
+density at the spine's centre *without* reading past the drawn crop's own
+boundary. The answer came from finally dumping the mesh's actual
+cross-section — for every u in the spine band, where that point physically
+sits across the spine's width. The profile settled the mechanism:
+
+- The band's first and last slivers of UV lie flat against the cover
+  boards — they consume ~9% of the band while contributing **zero**
+  projected width.
+- The curved rims consume another large share for almost none.
+- Even the "flat" middle is a shallow arc.
+
+The mesh's UVs hand the spine crop out per unit of jacket **surface**, but
+the eye sees the surface's **projection** — and at the flat middle, where
+the art actually reads, the surface-to-projection mismatch works out to
+~1.2x horizontal magnification. That number, measured off the geometry,
+matches both the observed ellipse and the mysterious `1.17` that had
+looked right in bug #5: the old constant was an empirical stand-in for
+the real ratio. It also explains every stubborn property — independent of
+shelf position and circle size (intrinsic to geometry + UVs, not the
+camera), and untouched by blur fixes (nothing to do with mips).
+
+The fix (`measureSpineBand` + `addSpineRemap`): measure z(u) — the
+projected position of each u across the spine's width, in root space so
+per-book thickness scaling divides out — normalise it into a 32-entry
+warp, and remap the spine segment through *that* instead of linearly in
+u. Each u now samples the crop at the fraction of the on-screen width
+where it actually lands. The crop still spans exactly `[f1, f2]`: the
+centre's extra density comes out of the rims, whose few projected pixels
+never showed theirs anyway. Nothing samples past the crop's edges, so
+bug #6 stays fixed — verified, zero bleed pixels along the silhouette
+after the change.
+
+Confirmed with the controlled circle: 0.97 width-to-height isolated
+(the test file's own circle measures 0.975 — JPEG edge softness), exactly
+1.00 at the default shelf position, down from the 1.15–1.17 ellipse. The
+real cover's logo mark reads round.
+
 ## The full picture, for a calibrated book
 
 1. Geometry is scaled by `thickness`, computed from page count.
@@ -314,13 +354,13 @@ at the seams.
 5. That spine boundary is itself measured in the model's own intrinsic
    frame — relative to root, not full-scene world space — so it doesn't
    drift with a book's thickness or shelf position (bug #4's fix).
-6. Every sample stays a texel and a half inside its own crop, so ordinary
-   bilinear filtering can't blend in whatever the neighbouring panel's art
-   happens to put near the seam (bug #6's fix) — but the crop itself is
-   never widened past what the file actually drew for it, even though the
-   spine's real curve still leaves a small, open aspect imperfection
-   (bug #5/#6, reverted rather than shipped a fix that reads past the
-   file's own edge).
+6. Every sample keeps its filter kernel inside its own crop, so bilinear
+   filtering can't blend in whatever the neighbouring panel's art puts
+   near the seam (bug #6's fix) — and the crop is never widened past what
+   the file actually drew for it.
+7. Within the spine band, the crop is distributed by the mesh's measured
+   *projection* rather than its surface length, so art on the flat middle
+   samples at true density and circles render as circles (bug #5's fix).
 
 For every other book, none of that runs — it's the same plain texture
 stretch the app always used, waiting for its own cover to be rebuilt the

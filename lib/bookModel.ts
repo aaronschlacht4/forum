@@ -111,7 +111,7 @@ let warnedNoJacketMaterial = false;
  */
 export function measureSpineBand(
   root: THREE.Object3D
-): { u1: number; u2: number } | null {
+): { u1: number; u2: number; warp: number[] } | null {
   // Relative to root, not full-scene world space. A mesh's own vertex data
   // is only meaningful once carried through whatever transform its node has
   // relative to root — but by the time this runs, root (bookRoot) is
@@ -172,8 +172,87 @@ export function measureSpineBand(
       u2 = Math.max(u2, uv.getX(i));
     }
   }
-  return u2 > u1 ? { u1, u2 } : null;
+  if (!(u2 > u1)) return null;
+
+  // ---- The projection warp: where each u in the band actually sits on
+  // screen, measured off the mesh.
+  //
+  // The mesh's UVs spread the spine's slice of the strip along the jacket's
+  // SURFACE — the flat middle, the curved rims either side of it, even a
+  // short stretch lying parallel to the cover boards where the wrap meets
+  // them. The eye, looking at a shelved book, sees the PROJECTION of all
+  // that: the flat middle nearly at full size, the rims foreshortened to
+  // slivers, the board-parallel stretch edge-on at zero width. A remap
+  // linear in u hands out the file's spine crop evenly per unit of
+  // *surface*, so the segments the projection shrinks still consume their
+  // full share of pixels and the flat middle — where the art actually
+  // reads — is left with too few: art there renders horizontally magnified
+  // by (surface length / projected width), measured at ~1.2x dead centre.
+  // That is the stretch that made a drawn circle an ellipse, why it never
+  // varied with shelf position or circle size (it's intrinsic to geometry
+  // + UVs, not the camera), and why blur fixes never touched it.
+  //
+  // So: sample the crop proportionally to projected position instead. The
+  // spine's width direction is local Z (the thickness axis — root space,
+  // so per-book thickness scaling divides out of the ratio below and one
+  // measurement is right for every book). For each u in the band, take the
+  // mesh's own z there, normalised across the band: that IS the fraction
+  // of the on-screen spine width where that u lands, and therefore the
+  // fraction of the file's spine crop it should sample. The crop still
+  // spans exactly [f1, f2] — the centre's extra density comes out of the
+  // rims, whose few projected pixels never showed theirs anyway — so
+  // nothing samples past the crop's own edges, which is what got the old
+  // flat 1.17x magnification reverted.
+  const byU = new Map<number, { z: number; n: number }>();
+  for (const mesh of jackets) {
+    const rel = new THREE.Matrix4().multiplyMatrices(toRoot, mesh.matrixWorld);
+    const pos = mesh.geometry.getAttribute("position");
+    const uv = mesh.geometry.getAttribute("uv");
+    if (!uv) continue;
+    for (let i = 0; i < pos.count; i++) {
+      const ux = uv.getX(i);
+      if (ux < u1 || ux > u2) continue;
+      v.fromBufferAttribute(pos, i).applyMatrix4(rel);
+      const key = Math.round(ux * 1e5) / 1e5;
+      const e = byU.get(key);
+      if (e) { e.z += v.z; e.n++; }
+      else byU.set(key, { z: v.z, n: 1 });
+    }
+  }
+  const profile = [...byU.entries()]
+    .map(([u, e]) => ({ u, z: e.z / e.n }))
+    .sort((a, b) => a.u - b.u);
+
+  // Not enough distinct cross-section points to describe a curve — fall
+  // back to the identity warp (plain linear remap, the old behaviour).
+  if (profile.length < 3) {
+    return { u1, u2, warp: Array.from({ length: WARP_SAMPLES }, (_, i) => i / (WARP_SAMPLES - 1)) };
+  }
+
+  const z0 = profile[0].z;
+  const z1 = profile[profile.length - 1].z;
+  const zSpan = z1 - z0;
+  const warp: number[] = [];
+  for (let i = 0; i < WARP_SAMPLES; i++) {
+    const u = u1 + (i / (WARP_SAMPLES - 1)) * (u2 - u1);
+    // Linear interpolation within the measured profile.
+    let j = 0;
+    while (j < profile.length - 2 && profile[j + 1].u < u) j++;
+    const a = profile[j];
+    const b = profile[j + 1];
+    const t = b.u > a.u ? (u - a.u) / (b.u - a.u) : 0;
+    const z = a.z + (b.z - a.z) * Math.min(Math.max(t, 0), 1);
+    const w = Math.abs(zSpan) > 1e-9 ? (z - z0) / zSpan : i / (WARP_SAMPLES - 1);
+    // Monotonic by construction on a sane mesh; enforce it anyway so a
+    // stray vertex can never make the remap double back on itself.
+    warp.push(Math.min(Math.max(w, warp.length ? warp[warp.length - 1] : 0), 1));
+  }
+
+  return { u1, u2, warp };
 }
+
+/** Resolution of the projection warp passed to the spine shader. */
+const WARP_SAMPLES = 32;
 
 /**
  * The spine crop's width as a fraction of the file's own real width — read
@@ -259,7 +338,7 @@ function spineFractionOfWidth(
  */
 function addSpineRemap(
   mat: THREE.MeshStandardMaterial,
-  band: { u1: number; u2: number },
+  band: { u1: number; u2: number; warp: number[] },
   spineFraction: number,
   imageWidth: number
 ) {
@@ -292,10 +371,13 @@ function addSpineRemap(
       value: new THREE.Vector4(band.u1, band.u2, f1, f2),
     };
     shader.uniforms.spineRemapInset = { value: inset };
+    shader.uniforms.spineWarp = { value: band.warp };
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <map_pars_fragment>",
-        "#include <map_pars_fragment>\nuniform vec4 spineRemap;\nuniform float spineRemapInset;"
+        "#include <map_pars_fragment>\nuniform vec4 spineRemap;\nuniform float spineRemapInset;\nuniform float spineWarp[" +
+          WARP_SAMPLES +
+          "];"
       )
       .replace(
         "#include <map_fragment>",
@@ -344,8 +426,23 @@ function addSpineRemap(
     slope = f1 / u1;
     jacketUv.x = clamp(u * slope, inset, f1 - inset);
   } else if (u <= u2 + rim) {
-    slope = (f2 - f1) / (u2 - u1);
-    jacketUv.x = clamp(f1 + (u - u1) * slope, f1 + inset, f2 - inset);
+    // Not linear in u: the mesh's UVs hand the spine crop out per unit of
+    // jacket SURFACE, but the eye sees the surface's projection — the flat
+    // middle near full size, the curved rims foreshortened to slivers. So
+    // the crop is distributed per unit of PROJECTED width instead, through
+    // spineWarp: the measured fraction of the on-screen spine width where
+    // each u actually lands (see measureSpineBand). Without this, art on
+    // the flat middle rendered horizontally magnified by the surface-to-
+    // projection ratio (~1.2x on book2.glb) — a drawn circle became a
+    // visibly wide ellipse. The warp only redistributes within [f1, f2]:
+    // nothing samples past the crop's own edges.
+    float t = clamp((u - u1) / (u2 - u1), 0.0, 1.0) * ${WARP_SAMPLES - 1}.0;
+    int wi = int(floor(min(t, ${WARP_SAMPLES - 2}.0)));
+    float wf = t - float(wi);
+    float w0 = spineWarp[wi];
+    float w1 = spineWarp[wi + 1];
+    slope = (f2 - f1) * (w1 - w0) * ${WARP_SAMPLES - 1}.0 / (u2 - u1);
+    jacketUv.x = clamp(f1 + (f2 - f1) * mix(w0, w1, wf), f1 + inset, f2 - inset);
   } else {
     slope = (1.0 - f2) / (1.0 - u2);
     jacketUv.x = clamp(f2 + (u - u2) * slope, f2 + inset, 1.0 - inset);
@@ -376,7 +473,7 @@ function addSpineRemap(
 function makeCoverMaterial(
   source: THREE.Material,
   tex: THREE.Texture,
-  spineBand?: { u1: number; u2: number } | null,
+  spineBand?: { u1: number; u2: number; warp: number[] } | null,
   spineScale = 1
 ): THREE.Material {
   const mat = source.clone() as THREE.MeshStandardMaterial;
