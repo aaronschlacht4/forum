@@ -79,11 +79,21 @@ Crime & P.:  203 × 1.60 = 325px  →  file is 2167×1200, spine at 921–1246px
 **Half B — the shader.** A file built this way no longer matches the mesh's
 fixed 0.44–0.56 split, so Claude added a custom fragment shader that remaps
 the sampling coordinate at render time: it takes the mesh's fixed spine
-band and projects it onto wherever the file's own spine actually sits,
-computed from that same thickness number. At thickness = 1 this remap is
-mathematically a no-op — a fixed-proportion file behaves exactly like it
-always did. At MSFM's thickness of 0.55, it samples exactly the 112px band
-the file was actually drawn with, not the mesh's generic 12%.
+band and projects it onto wherever the file's own spine actually sits.
+
+Where "wherever the file's own spine actually sits" isn't assumed from a
+formula — it's read off the file itself at render time. The shader takes
+the cover's real, loaded width and height, computes `spinePx = 203 ×
+thickness × (fileHeight / 1200)` against *that* file's own height, and
+takes the spine as the literal centre of the image: that many pixels,
+centred, with back and front splitting whatever's left over evenly. At
+thickness = 1 on a file built exactly to the reference size this lands on
+the same 921/203/921 split as before; on any other file it still finds the
+spine correctly, because it's derived from the file's real dimensions
+rather than an assumption about what they ought to be. (This is also why a
+file whose total width is a little off from the formula — which happened
+more than once while getting MSFM's cover right — self-corrects instead of
+silently misaligning.)
 
 This remap only runs for a book explicitly flagged `cover_calibrated =
 true` in the `books` table. Every other book — Crime and Punishment's
@@ -132,14 +142,45 @@ before any remapping happens, and hand it to the GPU explicitly
 (`textureGrad`) instead of letting it guess from the already-distorted
 remapped one.
 
+## 7. Bug #3: the first bleed fix quietly stretched the art
+
+`textureGrad` alone still left a visible sliver of bleed — the seam was
+right, the blur amount was closer to correct, but a genuinely narrow spine
+(MSFM's is barely 112px) means even ordinary, non-artifact filtering blur
+eats a real fraction of it. The first attempt to close that gap sampled a
+*smaller* window than `[f1, f2]` — a small margin taken off both edges — on
+the theory that giving the blur more room to land on spine, not cover,
+would hide the rest of the seam.
+
+It worked, for bleed. But it has a cost that isn't obvious until you look
+at anything round: the sampled window got narrower while the rendered
+*geometry* stayed exactly as wide as the thickness formula says it should.
+Fewer source pixels, stretched across the same physical space, is a
+horizontal-only zoom. Text hides that reasonably well — a reader's eye
+doesn't measure letterforms. A circular logo mark doesn't hide it at all;
+it renders as a visibly wider ellipse, worse the bigger the margin. That
+mismatch is what showed up on Man's Search for Meaning's spine — the small
+circular logo at the bottom stretched into an oval.
+
+The fix keeps the width fix (bug #1) and the mip fix (bug #2), and drops
+the margin entirely — every crop is sampled at exactly its own true width,
+so nothing shrinks unevenly and nothing stretches. In its place, the
+gradient handed to `textureGrad` is scaled down a little (×0.6) before the
+lookup. That biases the GPU toward a sharper mip *without moving which
+pixel gets sampled* — it can only ever narrow the blur, never reintroduce
+the margin's zoom, because it never touches the sampling coordinate at
+all.
+
 ## The full picture, for a calibrated book
 
 1. Geometry is scaled by `thickness`, computed from page count.
-2. The shader remaps the sample window to match that same `thickness`.
+2. The shader remaps the sample window to the file's own real spine crop —
+   read from the file's actual dimensions, not assumed (bug #3's fix).
 3. That remap is measured against the true, curve-inclusive spine boundary
-   (bug #1's fix).
-4. The GPU blurs using the real, undistorted rate of change rather than an
-   artifact of the remap's own math (bug #2's fix).
+   on the mesh side (bug #1's fix).
+4. The GPU blurs using the real, undistorted rate of change, biased a
+   little sharper, rather than an artifact of the remap's own math (bug
+   #2's fix) — and never by sampling a narrower window, so nothing stretches.
 
 For every other book, none of that runs — it's the same plain texture
 stretch the app always used, waiting for its own cover to be rebuilt the
