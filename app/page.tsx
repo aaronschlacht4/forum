@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import LiveDiscussionDemo from "@/components/LiveDiscussionDemo";
 import AuthModal from "@/components/AuthModal";
-import SpinningShelf, { type ShowcaseBook } from "@/components/SpinningShelf";
 import { useAuth } from "@/lib/AuthContext";
+import { coverUrlFor } from "@/lib/bookModel";
 
 /* ---- Palette: the reader's own colours, brought out front.
    The page sits on the paper beige; the chrome (nav, footer) wears the
@@ -19,7 +19,7 @@ const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
 
 const serif = { fontFamily: "'Crimson Text', serif" } as const;
 
-type Book = ShowcaseBook;
+type Book = { id: string; title?: string; author?: string; cover_path?: string };
 
 const navLink: React.CSSProperties = {
   fontSize: 14,
@@ -122,6 +122,64 @@ export default function HomePage() {
         .nav-item:hover { color: ${CREAM} !important; }
         .seg-item:hover { color: ${INK}; background: rgba(230, 227, 211, 0.6); }
         .library-cta:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(36,23,3,0.28); }
+
+        /* Top Books tiles: flat covers dressed to read as physical books
+           resting on the paper. The frame is the wraparound convention's own
+           front-cover proportion; the image is a right-anchored full-height
+           slice, so only cropping ever happens to it — never a stretch. */
+        .book-tile__jacket {
+          position: relative;
+          aspect-ratio: 921 / 1200;
+          overflow: hidden;
+          border-radius: 4px 9px 9px 4px;
+          background: #e6e3d3;
+          box-shadow:
+            inset 3px 0 6px -3px rgba(36,23,3,0.4),
+            0 1px 2px rgba(36,23,3,0.18),
+            0 8px 18px rgba(36,23,3,0.16),
+            0 18px 34px rgba(36,23,3,0.1);
+          transition: transform 200ms ease, box-shadow 200ms ease;
+        }
+        .book-tile__img {
+          position: absolute;
+          top: 0;
+          right: 0;
+          height: 100%;
+          width: auto;
+          max-width: none;
+        }
+        /* The bound edge: a hinge shadow and highlight line along the left,
+           the cheap trick that makes a flat rectangle read as a cover. */
+        .book-tile__spine {
+          position: absolute;
+          inset: 0 auto 0 0;
+          width: 9%;
+          pointer-events: none;
+          background: linear-gradient(90deg,
+            rgba(36,23,3,0.32),
+            rgba(36,23,3,0.1) 46%,
+            rgba(255,255,255,0.22) 74%,
+            rgba(36,23,3,0.1));
+        }
+        /* A whisper of top light across the jacket, like the shelf's lamps. */
+        .book-tile__sheen {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          background: linear-gradient(168deg,
+            rgba(255,255,255,0.16),
+            rgba(255,255,255,0.04) 34%,
+            rgba(36,23,3,0.05) 82%,
+            rgba(36,23,3,0.12));
+        }
+        .book-tile:hover .book-tile__jacket {
+          transform: translateY(-6px);
+          box-shadow:
+            inset 3px 0 6px -3px rgba(36,23,3,0.4),
+            0 2px 4px rgba(36,23,3,0.16),
+            0 14px 28px rgba(36,23,3,0.2),
+            0 30px 52px rgba(36,23,3,0.14);
+        }
       `}</style>
 
       {/* The reading window's bar, worn as the site's nav */}
@@ -274,18 +332,60 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl">
           {sectionHeading("Top Books Being Read", "Where the shelf is busiest this week")}
 
-          {/* The top books as real 3D volumes, slowly turning — rendered
-              through the same cover pipeline as the library shelf, so a
-              cover can never be cropped or stretched differently here than
-              it is there. */}
-          <div className="reveal reveal-delay-1">
-            {books.length > 0 ? (
-              <SpinningShelf books={books} />
-            ) : (
-              <div className="text-center" style={{ ...serif, color: MUTED, padding: "24px 0" }}>
-                Loading the shelf…
-              </div>
-            )}
+          {/* Covers shown as right-anchored, full-height slices inside a
+              front-cover-proportioned frame (the wraparound convention's own
+              921:1200). Cropping is the only operation involved — the image
+              is never scaled by different factors per axis — so no cover
+              can render stretched here, whatever its file's layout is. */}
+          <div className="reveal reveal-delay-1 grid grid-cols-2 gap-8 sm:grid-cols-3 lg:grid-cols-6">
+            {books.length > 0
+              ? books.map((book) => {
+                  const cover = coverUrlFor(book);
+                  return (
+                    <a
+                      key={book.id}
+                      href={`/book/${encodeURIComponent(book.id)}`}
+                      className="book-tile"
+                      style={{ textDecoration: "none", display: "block" }}
+                    >
+                      <div className="book-tile__jacket">
+                        {cover && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img className="book-tile__img" src={cover} alt="" />
+                        )}
+                        <div className="book-tile__spine" aria-hidden />
+                        <div className="book-tile__sheen" aria-hidden />
+                      </div>
+                      <div style={{ padding: "12px 2px 0", textAlign: "center" }}>
+                        <div
+                          style={{
+                            ...serif,
+                            fontSize: 15,
+                            fontWeight: 600,
+                            color: INK,
+                            lineHeight: 1.3,
+                            overflow: "hidden",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                          }}
+                        >
+                          {book.title || "Untitled"}
+                        </div>
+                        {book.author && (
+                          <div style={{ ...serif, fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                            {book.author}
+                          </div>
+                        )}
+                      </div>
+                    </a>
+                  );
+                })
+              : (
+                <div className="col-span-full text-center" style={{ ...serif, color: MUTED, padding: "24px 0" }}>
+                  Loading the shelf…
+                </div>
+              )}
           </div>
         </div>
       </section>
