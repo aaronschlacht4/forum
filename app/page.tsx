@@ -3,14 +3,13 @@
 import { useEffect, useState } from "react";
 import LiveDiscussionDemo from "@/components/LiveDiscussionDemo";
 import AuthModal from "@/components/AuthModal";
+import SpinningShelf, { type ShowcaseBook } from "@/components/SpinningShelf";
 import { useAuth } from "@/lib/AuthContext";
-import { coverUrlFor } from "@/lib/bookModel";
 
 /* ---- Palette: the reader's own colours, brought out front.
    The page sits on the paper beige; the chrome (nav, footer) wears the
    reading window's brown, with the same warm cream for its type. ---- */
 const BEIGE = "#f1efe3";
-const BEIGE_RAISED = "#e6e3d3"; // the pressed segment of a control
 const INK = "#3f3828"; // headings: the paper's ink warmed toward the chrome
 const MUTED = "#87816e"; // secondary type on beige
 const HAIRLINE = "rgba(35, 29, 21, 0.14)";
@@ -20,7 +19,7 @@ const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
 
 const serif = { fontFamily: "'Crimson Text', serif" } as const;
 
-type Book = { id: string; title?: string; author?: string; cover_path?: string };
+type Book = ShowcaseBook;
 
 const navLink: React.CSSProperties = {
   fontSize: 14,
@@ -123,7 +122,6 @@ export default function HomePage() {
         .nav-item:hover { color: ${CREAM} !important; }
         .seg-item:hover { color: ${INK}; background: rgba(230, 227, 211, 0.6); }
         .library-cta:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(36,23,3,0.28); }
-        .book-card:hover { transform: translateY(-3px); border-color: rgba(35,29,21,0.28); }
       `}</style>
 
       {/* The reading window's bar, worn as the site's nav */}
@@ -276,82 +274,18 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl">
           {sectionHeading("Top Books Being Read", "Where the shelf is busiest this week")}
 
-          <div className="reveal reveal-delay-1 grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-6">
-            {books.length > 0
-              ? books.map((book) => {
-                  const cover = coverUrlFor(book);
-                  return (
-                    <a
-                      key={book.id}
-                      href={`/book/${book.id}`}
-                      className="book-card"
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        textDecoration: "none",
-                        borderRadius: 12,
-                        border: `1px solid ${HAIRLINE}`,
-                        background: "rgba(255,255,255,0.4)",
-                        overflow: "hidden",
-                        transition: "transform 160ms ease, border-color 160ms ease",
-                      }}
-                    >
-                      <div
-                        style={{
-                          aspectRatio: "2 / 3",
-                          overflow: "hidden",
-                          background: BEIGE_RAISED,
-                        }}
-                      >
-                        {cover && (
-                          <div
-                            style={{
-                              width: "100%",
-                              height: "100%",
-                              // Each cover file is the full jacket unwrapped —
-                              // back cover 45%, spine 10%, front cover 45%,
-                              // left to right. `cover`-fit crops by whatever
-                              // fraction the box's own shape happens to
-                              // demand, which for these files runs past the
-                              // 45% mark and pulls the spine into view. Fixing
-                              // the horizontal scale to 100/45% instead always
-                              // shows exactly the rightmost 45%, regardless of
-                              // the source image's real proportions.
-                              background: `url(${cover}) right center / 222.222% auto no-repeat`,
-                            }}
-                          />
-                        )}
-                      </div>
-                      <div style={{ padding: "10px 12px 14px" }}>
-                        <div
-                          style={{
-                            ...serif,
-                            fontSize: 14,
-                            fontWeight: 600,
-                            color: INK,
-                            lineHeight: 1.3,
-                            overflow: "hidden",
-                            display: "-webkit-box",
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical",
-                          }}
-                        >
-                          {book.title || "Untitled"}
-                        </div>
-                        {book.author && (
-                          <div style={{ ...serif, fontSize: 12, color: MUTED, marginTop: 3 }}>
-                            {book.author}
-                          </div>
-                        )}
-                      </div>
-                    </a>
-                  );
-                })
-              : (
-                <div className="col-span-full text-center" style={{ ...serif, color: MUTED, padding: "24px 0" }}>
-                  Loading the shelf…
-                </div>
-              )}
+          {/* The top books as real 3D volumes, slowly turning — rendered
+              through the same cover pipeline as the library shelf, so a
+              cover can never be cropped or stretched differently here than
+              it is there. */}
+          <div className="reveal reveal-delay-1">
+            {books.length > 0 ? (
+              <SpinningShelf books={books} />
+            ) : (
+              <div className="text-center" style={{ ...serif, color: MUTED, padding: "24px 0" }}>
+                Loading the shelf…
+              </div>
+            )}
           </div>
         </div>
       </section>
