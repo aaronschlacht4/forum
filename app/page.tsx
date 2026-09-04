@@ -19,7 +19,41 @@ const CREAM_DIM = "rgba(255, 228, 192, 0.72)";
 
 const serif = { fontFamily: "'Crimson Text', serif" } as const;
 
-type Book = { id: string; title?: string; author?: string; cover_path?: string };
+type Book = {
+  id: string;
+  title?: string;
+  author?: string;
+  cover_path?: string;
+  pageCount?: number | null;
+};
+
+// Mirrors spineThickness in components/ShelfScene.tsx — a book should look
+// exactly as thick on the landing page as it does on the shelf.
+function spineThickness(pageCount?: number | null): number {
+  if (!pageCount || pageCount <= 0) return 1;
+  return Math.min(1.7, Math.max(0.55, Math.sqrt(pageCount / 300)));
+}
+
+/**
+ * Per-book tile geometry, from its real page count. Face-on, all covers
+ * share one height and width — what varies between a 69-page book and a
+ * 767-page one is the bound edge: the sliver of spine a book shows when it
+ * doesn't lie perfectly flat. So each tile is the front cover plus half its
+ * own spine's width turned toward the viewer (in the wraparound
+ * convention's units: 921px cover, 203 × thickness spine, 1200px tall),
+ * and the hinge shading covers exactly that turned share. Tiles share a
+ * height — width is what grows with thickness, the way it does on a shelf.
+ */
+function tileGeometry(pageCount?: number | null) {
+  const spineTurn = 0.5 * 203 * spineThickness(pageCount);
+  const width = 921 + spineTurn;
+  const maxWidth = 921 + 0.5 * 203 * 1.7;
+  return {
+    aspect: `${Math.round(width)} / 1200`,
+    widthPct: (width / maxWidth) * 100,
+    hingePct: (spineTurn / width) * 100,
+  };
+}
 
 const navLink: React.CSSProperties = {
   fontSize: 14,
@@ -129,7 +163,6 @@ export default function HomePage() {
            slice, so only cropping ever happens to it — never a stretch. */
         .book-tile__jacket {
           position: relative;
-          aspect-ratio: 921 / 1200;
           overflow: hidden;
           border-radius: 4px 9px 9px 4px;
           background: #e6e3d3;
@@ -153,7 +186,6 @@ export default function HomePage() {
         .book-tile__spine {
           position: absolute;
           inset: 0 auto 0 0;
-          width: 9%;
           pointer-events: none;
           background: linear-gradient(90deg,
             rgba(36,23,3,0.32),
@@ -341,6 +373,7 @@ export default function HomePage() {
             {books.length > 0
               ? books.map((book) => {
                   const cover = coverUrlFor(book);
+                  const geo = tileGeometry(book.pageCount);
                   return (
                     <a
                       key={book.id}
@@ -348,12 +381,23 @@ export default function HomePage() {
                       className="book-tile"
                       style={{ textDecoration: "none", display: "block" }}
                     >
-                      <div className="book-tile__jacket">
+                      <div
+                        className="book-tile__jacket"
+                        style={{
+                          aspectRatio: geo.aspect,
+                          width: `${geo.widthPct.toFixed(1)}%`,
+                          margin: "0 auto",
+                        }}
+                      >
                         {cover && (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img className="book-tile__img" src={cover} alt="" />
                         )}
-                        <div className="book-tile__spine" aria-hidden />
+                        <div
+                          className="book-tile__spine"
+                          style={{ width: `${geo.hingePct.toFixed(1)}%` }}
+                          aria-hidden
+                        />
                         <div className="book-tile__sheen" aria-hidden />
                       </div>
                       <div style={{ padding: "12px 2px 0", textAlign: "center" }}>
