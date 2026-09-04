@@ -680,42 +680,43 @@ function ShelfBooks({
 
       {editable && active && activeAt && !drag && (
         <Html
-          // On the book, not above it: anchored at the spine's mid-height and
-          // pulled toward the camera, the card reads as a label pinned to the
-          // selected book — it can't drift into the header or sit ambiguously
-          // between two neighbours the way a floating pill row did.
-          position={[
-            activeAt.x,
-            activeAt.y + book.size.y * base.scale * 0.62,
-            activeAt.z + 0.5,
+          // Screen-fixed at the bottom centre of the viewport, the way a
+          // selection toolbar works everywhere else — it never covers the
+          // selected book (or any book), and it doesn't jump around as
+          // different books are picked. The lifted book is the selection
+          // indicator; this bar is just its controls.
+          calculatePosition={(_el, _camera, size) => [
+            size.width / 2,
+            size.height - 74,
           ]}
           center
-          distanceFactor={8}
           zIndexRange={[20, 10]}
         >
-          <div className="shelf-book-card">
-            <style>{shelfCardCss}</style>
-            <div className="shelf-book-card__title">
-              {active.data.title ?? "Untitled"}
+          <div className="shelf-book-bar">
+            <style>{shelfBarCss}</style>
+            <div className="shelf-book-bar__book">
+              <div className="shelf-book-bar__title">
+                {active.data.title ?? "Untitled"}
+              </div>
+              {active.data.author && (
+                <div className="shelf-book-bar__author">{active.data.author}</div>
+              )}
             </div>
-            {active.data.author && (
-              <div className="shelf-book-card__author">{active.data.author}</div>
-            )}
-            <div className="shelf-book-card__rule" />
+            <div className="shelf-book-bar__rule" />
             <button
-              className="shelf-book-card__action"
+              className="shelf-book-bar__action"
               title={`Add another copy of ${active.data.title ?? "this book"}`}
               onClick={() => onDuplicate?.(pick!)}
             >
-              <Copy size={12} strokeWidth={1.75} aria-hidden />
+              <Copy size={13} strokeWidth={1.75} aria-hidden />
               Duplicate
             </button>
             <button
-              className="shelf-book-card__action shelf-book-card__action--remove"
+              className="shelf-book-bar__action shelf-book-bar__action--remove"
               title={`Take ${active.data.title ?? "this book"} off the shelf`}
               onClick={() => { setSelected(null); onRemove?.(pick!); }}
             >
-              <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+              <Trash2 size={13} strokeWidth={1.75} aria-hidden />
               Remove
             </button>
           </div>
@@ -726,88 +727,88 @@ function ShelfBooks({
 }
 
 /**
- * The action card shown over a selected book while arranging. A <style> tag
- * rather than inline styles because hover/press states have no inline form,
- * and the card is markup inside drei's <Html>, outside every stylesheet the
- * app owns.
+ * The selection toolbar shown while arranging. A <style> tag rather than
+ * inline styles because hover/press states have no inline form, and the bar
+ * is markup inside drei's <Html>, outside every stylesheet the app owns.
  */
-const shelfCardCss = /* css */ `
+const shelfBarCss = /* css */ `
 /* Transform only, never opacity: with the canvas on a demand frameloop the
-   compositor can leave a pending animation at 0% indefinitely, and a card
-   stuck at "from" must still be readable. Stuck here means offset by 5px;
+   compositor can leave a pending animation at 0% indefinitely, and a bar
+   stuck at "from" must still be readable. Stuck here means offset by 6px;
    stuck on an opacity fade meant invisible. */
-@keyframes shelf-book-card-in {
-  from { transform: translateY(5px) scale(0.97); }
+@keyframes shelf-book-bar-in {
+  from { transform: translateY(6px); }
   to   { transform: none; }
 }
-.shelf-book-card {
-  animation: shelf-book-card-in 130ms ease-out;
-  background: linear-gradient(170deg, rgba(46,32,18,0.97), rgba(26,16,7,0.97));
+.shelf-book-bar {
+  align-items: center;
+  animation: shelf-book-bar-in 150ms ease-out;
+  background: linear-gradient(180deg, rgba(46,32,18,0.97), rgba(26,16,7,0.97));
   border: 1px solid rgba(255,208,140,0.28);
-  border-radius: 11px;
+  border-radius: 999px;
   box-shadow:
     0 1px 0 rgba(255,224,170,0.09) inset,
     0 10px 28px rgba(0,0,0,0.55),
     0 2px 8px rgba(0,0,0,0.4);
   display: flex;
-  flex-direction: column;
   font-family: system-ui, sans-serif;
-  min-width: 128px;
-  max-width: 170px;
-  padding: 10px 6px 6px;
+  gap: 4px;
+  max-width: min(560px, 84vw);
+  padding: 7px 8px 7px 18px;
 }
-.shelf-book-card__title {
+.shelf-book-bar__book {
+  min-width: 0;
+  padding-right: 12px;
+}
+.shelf-book-bar__title {
   color: #f3dcae;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.55px;
-  line-height: 1.3;
+  letter-spacing: 0.5px;
   overflow: hidden;
-  padding: 0 8px;
-  text-align: center;
+  text-overflow: ellipsis;
   text-transform: uppercase;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: nowrap;
 }
-.shelf-book-card__author {
+.shelf-book-bar__author {
   color: rgba(243,220,174,0.55);
-  font-size: 9.5px;
+  font-size: 10px;
   font-style: italic;
   letter-spacing: 0.3px;
+  margin-top: 1px;
   overflow: hidden;
-  padding: 2px 8px 0;
-  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.shelf-book-card__rule {
-  background: linear-gradient(90deg, transparent, rgba(255,208,140,0.3), transparent);
-  height: 1px;
-  margin: 8px 4px 4px;
+.shelf-book-bar__rule {
+  align-self: stretch;
+  background: linear-gradient(180deg, transparent, rgba(255,208,140,0.3), transparent);
+  flex: none;
+  margin: 2px 6px;
+  width: 1px;
 }
-.shelf-book-card__action {
+.shelf-book-bar__action {
   align-items: center;
   background: none;
   border: none;
-  border-radius: 7px;
+  border-radius: 999px;
   color: #ffe8c0;
   cursor: pointer;
   display: flex;
+  flex: none;
   font-family: inherit;
-  font-size: 11px;
-  gap: 8px;
+  font-size: 11.5px;
+  gap: 7px;
   letter-spacing: 0.35px;
-  padding: 6px 9px;
-  text-align: left;
+  padding: 8px 14px;
   transition: background 90ms ease;
   white-space: nowrap;
 }
-.shelf-book-card__action:hover { background: rgba(255,208,140,0.12); }
-.shelf-book-card__action:active { background: rgba(255,208,140,0.2); }
-.shelf-book-card__action--remove { color: #f0b09a; }
-.shelf-book-card__action--remove:hover { background: rgba(255,120,80,0.14); }
-.shelf-book-card__action--remove:active { background: rgba(255,120,80,0.22); }
+.shelf-book-bar__action:hover { background: rgba(255,208,140,0.12); }
+.shelf-book-bar__action:active { background: rgba(255,208,140,0.2); }
+.shelf-book-bar__action--remove { color: #f0b09a; }
+.shelf-book-bar__action--remove:hover { background: rgba(255,120,80,0.14); }
+.shelf-book-bar__action--remove:active { background: rgba(255,120,80,0.22); }
 `;
 
 /* ---- Camera: fits full width, scrolls vertically ---- */

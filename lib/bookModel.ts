@@ -109,9 +109,18 @@ let warnedNoJacketMaterial = false;
  * on the model's min-X plane are the spine's), rather than hardcoded, so a
  * re-exported model recalibrates itself.
  */
-export function measureSpineBand(
-  root: THREE.Object3D
-): { u1: number; u2: number; warp: number[] } | null {
+export type SpineBand = {
+  u1: number;
+  u2: number;
+  /** Projection warp across the spine band — see the comment in the body. */
+  warp: number[];
+  /** The jacket's own x extent in root space: the cover boards' width. */
+  depth: number;
+  /** The jacket's own y extent in root space: the book's height. */
+  height: number;
+};
+
+export function measureSpineBand(root: THREE.Object3D): SpineBand | null {
   // Relative to root, not full-scene world space. A mesh's own vertex data
   // is only meaningful once carried through whatever transform its node has
   // relative to root — but by the time this runs, root (bookRoot) is
@@ -130,6 +139,8 @@ export function measureSpineBand(
 
   let minX = Infinity;
   let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
   const jackets: THREE.Mesh[] = [];
   const v = new THREE.Vector3();
 
@@ -145,9 +156,13 @@ export function measureSpineBand(
       v.fromBufferAttribute(pos, i).applyMatrix4(rel);
       minX = Math.min(minX, v.x);
       maxX = Math.max(maxX, v.x);
+      minY = Math.min(minY, v.y);
+      maxY = Math.max(maxY, v.y);
     }
   });
   if (!jackets.length || !Number.isFinite(minX)) return null;
+  const depth = maxX - minX;
+  const height = maxY - minY;
 
   // The spine face is flat but the binding curves away from it on both
   // sides, and that curve is still front-on to the camera on a shelf — a
@@ -226,7 +241,13 @@ export function measureSpineBand(
   // Not enough distinct cross-section points to describe a curve — fall
   // back to the identity warp (plain linear remap, the old behaviour).
   if (profile.length < 3) {
-    return { u1, u2, warp: Array.from({ length: WARP_SAMPLES }, (_, i) => i / (WARP_SAMPLES - 1)) };
+    return {
+      u1,
+      u2,
+      warp: Array.from({ length: WARP_SAMPLES }, (_, i) => i / (WARP_SAMPLES - 1)),
+      depth,
+      height,
+    };
   }
 
   const z0 = profile[0].z;
@@ -248,7 +269,7 @@ export function measureSpineBand(
     warp.push(Math.min(Math.max(w, warp.length ? warp[warp.length - 1] : 0), 1));
   }
 
-  return { u1, u2, warp };
+  return { u1, u2, warp, depth, height };
 }
 
 /** Resolution of the projection warp passed to the spine shader. */
@@ -332,18 +353,18 @@ function spineFractionOfWidth(
  * horizontal-only zoom, and stretches anything circular into an ellipse —
  * most visible on the small logo mark, which is what it's named for below.
  *
- * Only called for a cover actually built to these proportions (see the
- * `calibrated` guard around this in applyCoverTexture) — carving up a cover
- * that wasn't drawn this way samples nonsense.
+ * Where f1/f2 — the file-space crop boundaries — come from is the caller's
+ * business (see CoverFit in makeCoverMaterial): exact convention fractions
+ * for a calibrated cover, aspect-derived ones for a face-on view of an
+ * uncalibrated one. This function just remaps the mesh's bands onto them.
  */
 function addSpineRemap(
   mat: THREE.MeshStandardMaterial,
   band: { u1: number; u2: number; warp: number[] },
-  spineFraction: number,
+  f1: number,
+  f2: number,
   imageWidth: number
 ) {
-  const f1 = 0.5 - spineFraction / 2;
-  const f2 = 0.5 + spineFraction / 2;
   // Ordinary bilinear filtering blends the couple of texels either side of
   // wherever it samples — true at any mip level, nothing to do with the
   // mip-selection fix above. f1/f2/0/1 aren't texture edges (ClampToEdge
@@ -470,11 +491,29 @@ function addSpineRemap(
   mat.needsUpdate = true;
 }
 
+/**
+ * How a cover file's width maps onto the jacket's three faces.
+ *
+ * - "convention": the file was built to the wraparound spec — spine at dead
+ *   centre at `203 × thickness` px per 1200px of height, covers splitting
+ *   the rest. Exact; only for cover_calibrated books.
+ * - "aspect": the file is a jacket image of unknown internal layout. Each
+ *   cover face samples an aspect-correct slice of the file — front from the
+ *   right edge, back from the left, each as wide as the face's own real
+ *   proportions ask for — and the spine takes whatever's left in the middle.
+ *   Not exact (nothing can be, without knowing the layout), but bounded:
+ *   plain full-width stretching distorted covers by whatever factor the
+ *   file's shape happened to disagree with the mesh's UV split, which for
+ *   the catalogue's files ran past 30%.
+ */
+export type CoverFit = "convention" | "aspect";
+
 function makeCoverMaterial(
   source: THREE.Material,
   tex: THREE.Texture,
-  spineBand?: { u1: number; u2: number; warp: number[] } | null,
-  spineScale = 1
+  spineBand?: SpineBand | null,
+  spineScale = 1,
+  fit: CoverFit = "convention"
 ): THREE.Material {
   const mat = source.clone() as THREE.MeshStandardMaterial;
   mat.map = tex;
@@ -482,8 +521,24 @@ function makeCoverMaterial(
   if (spineBand) {
     const img = tex.image as { width?: number; height?: number } | undefined;
     if (img?.width && img.height) {
-      const spineFraction = spineFractionOfWidth(img.width, img.height, spineScale);
-      addSpineRemap(mat, spineBand, spineFraction, img.width);
+      let f1: number;
+      let f2: number;
+      if (fit === "convention") {
+        const spineFraction = spineFractionOfWidth(img.width, img.height, spineScale);
+        f1 = 0.5 - spineFraction / 2;
+        f2 = 0.5 + spineFraction / 2;
+      } else {
+        // The slice width that renders this face undistorted: face aspect
+        // (board width / book height, off the mesh) times the file's own
+        // height-per-width. Capped so the two covers always leave the spine
+        // a sliver — a file too narrow to give both covers their full ask
+        // stays mildly compressed rather than overlapping in the middle.
+        const ideal = (spineBand.depth / spineBand.height) * (img.height / img.width);
+        const coverFrac = Math.min(ideal, 0.47);
+        f1 = coverFrac;
+        f2 = 1 - coverFrac;
+      }
+      addSpineRemap(mat, spineBand, f1, f2, img.width);
     }
   }
 
@@ -886,17 +941,26 @@ export function applyCoverTexture(
   tex: THREE.Texture,
   maxAnisotropy = 8,
   spineScale = 1,
-  calibrated = false
+  calibrated = false,
+  /**
+   * How to lay an UNCALIBRATED cover onto the jacket. "stretch" is the
+   * shelf's historical behaviour — the whole image across the whole strip —
+   * which is right for a spine-out shelf (the spine band lands near the
+   * image's middle) and wrong face-on. A view that shows covers face-on
+   * (the landing showcase) passes "aspect" to get aspect-correct slices
+   * per face instead. Calibrated covers ignore this: they always use their
+   * exact convention fit.
+   */
+  uncalibratedFit: "stretch" | "aspect" = "stretch"
 ): number {
   prepareCoverTexture(tex, maxAnisotropy);
   fitCoverToJacket(root, tex);
 
   // Where on the mesh's UV strip the spine face actually sits, so the shader
   // can line the file's own panels up with the faces they were drawn for.
-  // Only worth measuring for a cover actually built at those proportions —
-  // for anything else this would carve the image up along boundaries that
-  // don't correspond to its content, and come out worse than no remap at all.
-  const spineBand = calibrated ? measureSpineBand(root) : null;
+  const wantsRemap = calibrated || uncalibratedFit === "aspect";
+  const spineBand = wantsRemap ? measureSpineBand(root) : null;
+  const fit: CoverFit = calibrated ? "convention" : "aspect";
 
   const meshes: THREE.Mesh[] = [];
   root.traverse((o) => {
@@ -913,7 +977,7 @@ export function applyCoverTexture(
     const one = (m: THREE.Material) => {
       if (!match(m)) return accent ? tintMaterial(m, accent) : m;
       count++;
-      return makeCoverMaterial(m, tex, spineBand, spineScale);
+      return makeCoverMaterial(m, tex, spineBand, spineScale, fit);
     };
     for (const mesh of meshes) {
       mesh.material = Array.isArray(mesh.material)

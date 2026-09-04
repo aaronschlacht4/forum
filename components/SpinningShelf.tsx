@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { ContactShadows, useGLTF } from "@react-three/drei";
+import { ContactShadows, Environment, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import {
   BOOK_MODEL_URL,
@@ -99,12 +99,17 @@ function TurningBook({
       (tex) => {
         if (cancelled) return void tex.dispose();
         prepareCoverTexture(tex, 16);
+        // "aspect" fit for uncalibrated covers: this view shows covers
+        // face-on, where the shelf's plain full-width stretch reads as
+        // exactly the distortion it is. Calibrated covers use their exact
+        // convention fit as always.
         applyCoverTexture(
           clone.root,
           tex,
           16,
           spineThickness(book.pageCount),
-          book.coverCalibrated ?? false
+          book.coverCalibrated ?? false,
+          "aspect"
         );
       },
       undefined,
@@ -187,15 +192,26 @@ export default function SpinningShelf({ books }: { books: ShowcaseBook[] }) {
         <Canvas
           frameloop={inView ? "always" : "demand"}
           camera={{ fov: 32 }}
-          gl={{ antialias: true, alpha: true }}
+          // The library canvas's exact colour pipeline — a cover must not
+          // read warmer or flatter here than it does on the shelf.
+          gl={{
+            antialias: true,
+            alpha: true,
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1.1,
+          }}
           dpr={[1, 2]}
           onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
         >
           <FitRow count={shown.length} />
-          {/* Warm key + cool fill, tuned for beige paper behind it. */}
-          <ambientLight intensity={0.85} color="#fff3dd" />
-          <directionalLight position={[4, 6, 8]} intensity={1.1} color="#ffedd0" />
-          <directionalLight position={[-6, 2, 5]} intensity={0.5} color="#dce8f5" />
+          {/* Same image-based lighting as the library shelf, with a soft
+              warm key on top for shape. Bare directional lights left the
+              covers flat and plasticky — a book is mostly seen by what the
+              room reflects into it. */}
+          <Environment preset="apartment" background={false} />
+          <ambientLight intensity={0.25} color="#fff3dd" />
+          <directionalLight position={[4, 6, 8]} intensity={0.85} color="#ffedd0" />
           {/* A soft pool of shadow under each book, so the row stands on
               the page instead of floating in front of it. */}
           <ContactShadows
