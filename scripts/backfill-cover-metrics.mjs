@@ -1,9 +1,25 @@
 #!/usr/bin/env node
 /**
- * Computes and stores each calibrated book's cover_aspect_ratio and
- * cover_spine_px (sql-migrations/13-add-cover-metrics.sql) — read off the
- * actual file in the `covers` bucket, the same way makeCoverMaterial reads
- * them at render time (lib/bookModel.ts), not typed in by hand.
+ * Computes each book's target wraparound-cover dimensions and stores them in
+ * books.cover_aspect_ratio / books.cover_spine_px
+ * (sql-migrations/13-add-cover-metrics.sql).
+ *
+ * These are a SPEC FOR BUILDING a cover, not a measurement of one that
+ * already exists — everything is computed against the fixed 1200px reference
+ * height the whole convention is defined in terms of, so the numbers say
+ * "draw this book's jacket at these proportions" rather than "this file
+ * happens to be this big". That means a book with no cover file yet still
+ * gets a meaningful answer, which is the point: the numbers come first, the
+ * artwork is built to match, and cover_calibrated goes true once it is.
+ *
+ * The layout, against a 1200px-tall canvas (see BOOK_MODEL_URL's doc comment
+ * in lib/bookModel.ts):
+ *
+ *   [ 921px back cover | 203px x thickness spine | 921px front cover ]
+ *
+ *   spinePx    = 203 x thickness
+ *   totalWidth = 921 + spinePx + 921
+ *   aspect     = totalWidth / 1200
  *
  * spineThickness below mirrors ShelfScene.tsx's own copy — that file is a
  * "use client" component this plain-Node script can't import, so, same as
@@ -11,11 +27,14 @@
  * sync by hand rather than shared. If the thickness formula changes there,
  * update it here too.
  *
- *   node scripts/backfill-cover-metrics.mjs
+ *   node scripts/backfill-cover-metrics.mjs           # write to the database
+ *   node scripts/backfill-cover-metrics.mjs --dry-run # print only
  */
 
 import fs from "node:fs";
 import path from "node:path";
+
+const DRY_RUN = process.argv.includes("--dry-run");
 
 function readEnv() {
   const file = path.join(process.cwd(), ".env.local");
@@ -34,7 +53,6 @@ function readEnv() {
 
 const { url: SUPABASE_URL, key: SERVICE_KEY } = readEnv();
 const AUTH = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
-const COVERS_BUCKET = "covers";
 
 // Mirrors ShelfScene.tsx's spineThickness — see the file-level comment.
 const DEFAULT_PAGE_COUNT = 300;
@@ -46,55 +64,30 @@ function spineThickness(pageCount) {
   return Math.min(THICKNESS_MAX, Math.max(THICKNESS_MIN, raw));
 }
 
-// Mirrors lib/bookModel.ts's spineFractionOfWidth constants — see that
-// file's SPINE_CURVE_MAGNIFICATION comment for why 1.17 is there at all.
-const SPINE_PX_PER_REFERENCE_HEIGHT = 203;
+// The convention's own constants, all defined against REFERENCE_HEIGHT.
 const REFERENCE_HEIGHT = 1200;
-const SPINE_CURVE_MAGNIFICATION = 1.17;
+const SPINE_PX_PER_REFERENCE_HEIGHT = 203;
+const COVER_WIDTH = 921;
 
-/**
- * Pixel dimensions straight out of a JPEG's own byte stream — no
- * dependency needed for something this small. Walks the marker segments
- * looking for a Start-Of-Frame marker (0xC0–0xCF, except the four that
- * aren't actually SOF: DHT/JPG/DAC/DHP), whose payload always starts with
- * 1 byte of precision then big-endian height, then width.
- */
-function jpegSize(buf) {
-  if (buf[0] !== 0xff || buf[1] !== 0xd8) return null; // not a JPEG
-  let i = 2;
-  while (i + 4 <= buf.length) {
-    if (buf[i] !== 0xff) { i++; continue; }
-    const marker = buf[i + 1];
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
-      i += 2; // markers with no length field
-      continue;
-    }
-    const len = buf.readUInt16BE(i + 2);
-    const isSOF = marker >= 0xc0 && marker <= 0xcf &&
-      marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-    if (isSOF) {
-      const height = buf.readUInt16BE(i + 5);
-      const width = buf.readUInt16BE(i + 7);
-      return { width, height };
-    }
-    i += 2 + len;
-  }
-  return null;
+function coverSpec(pageCount) {
+  const thickness = spineThickness(pageCount);
+  const spinePx = SPINE_PX_PER_REFERENCE_HEIGHT * thickness;
+  const totalWidth = COVER_WIDTH * 2 + spinePx;
+  return {
+    thickness,
+    spinePx,
+    totalWidth,
+    aspectRatio: totalWidth / REFERENCE_HEIGHT,
+  };
 }
 
 async function listBooks() {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/books?select=id,title,cover_path,page_count,cover_calibrated,cover_aspect_ratio,cover_spine_px&order=title`,
+    `${SUPABASE_URL}/rest/v1/books?select=id,title,page_count,cover_calibrated&order=title`,
     { headers: AUTH }
   );
   if (!res.ok) throw new Error(`Listing books failed: ${res.status} ${await res.text()}`);
   return res.json();
-}
-
-async function fetchCoverBytes(coverPath) {
-  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${COVERS_BUCKET}/${coverPath}`, { headers: AUTH });
-  if (!res.ok) return null;
-  return Buffer.from(await res.arrayBuffer());
 }
 
 async function patchMetrics(id, aspectRatio, spinePx) {
@@ -108,55 +101,46 @@ async function patchMetrics(id, aspectRatio, spinePx) {
 
 async function main() {
   const books = await listBooks();
-  console.log(`Checking ${books.length} book(s)\n`);
+  console.log(
+    `Cover build spec for ${books.length} book(s), at ${REFERENCE_HEIGHT}px height` +
+      (DRY_RUN ? " (dry run, nothing written)\n" : "\n")
+  );
 
-  let updated = 0, skipped = 0, missing = 0, notCalibrated = 0;
+  const pad = (s, n) => String(s).padEnd(n);
+  const padL = (s, n) => String(s).padStart(n);
+  console.log(
+    pad("title", 26) + padL("pages", 6) + padL("thick", 8) + padL("spine px", 10) +
+      padL("build size", 14) + padL("aspect", 9) + "  calibrated"
+  );
+  console.log("-".repeat(87));
+
+  let updated = 0;
   for (const book of books) {
-    const label = (book.title || book.id).slice(0, 32).padEnd(32);
+    const { thickness, spinePx, totalWidth, aspectRatio } = coverSpec(book.page_count);
 
-    if (!book.cover_calibrated) {
-      console.log(`  ${label} not cover_calibrated — skipped`);
-      notCalibrated++;
-      continue;
-    }
-    if (!book.cover_path) {
-      console.log(`  ${label} no cover_path — skipped`);
-      missing++;
-      continue;
-    }
-
-    const bytes = await fetchCoverBytes(book.cover_path);
-    if (!bytes) {
-      console.log(`  ${label} cover file not found in storage — skipped`);
-      missing++;
-      continue;
-    }
-
-    const size = jpegSize(bytes);
-    if (!size) {
-      console.log(`  ${label} couldn't read JPEG dimensions — skipped`);
-      missing++;
-      continue;
-    }
-
-    const thickness = spineThickness(book.page_count);
-    const aspectRatio = size.width / size.height;
-    const spinePx =
-      SPINE_PX_PER_REFERENCE_HEIGHT *
-      SPINE_CURVE_MAGNIFICATION *
-      thickness *
-      (size.height / REFERENCE_HEIGHT);
-
-    await patchMetrics(book.id, aspectRatio, spinePx);
     console.log(
-      `  ${label} ${size.width}×${size.height} → aspect ${aspectRatio.toFixed(4)}, spine ${spinePx.toFixed(1)}px`
+      pad((book.title || book.id).slice(0, 25), 26) +
+        padL(book.page_count ?? "?", 6) +
+        padL(thickness.toFixed(3), 8) +
+        padL(spinePx.toFixed(1), 10) +
+        padL(`${Math.round(totalWidth)}x${REFERENCE_HEIGHT}`, 14) +
+        padL(aspectRatio.toFixed(4), 9) +
+        "  " + (book.cover_calibrated ? "yes" : "no")
     );
-    updated++;
+
+    if (!DRY_RUN) {
+      await patchMetrics(book.id, aspectRatio, spinePx);
+      updated++;
+    }
   }
 
   console.log(
-    `\nDone: ${updated} updated, ${notCalibrated} not calibrated, ${missing} missing file/dims, ${skipped} skipped`
+    `\nLayout: ${COVER_WIDTH}px back | spine | ${COVER_WIDTH}px front, on a ${REFERENCE_HEIGHT}px canvas.`
   );
+  console.log(
+    "A book with no page_count falls back to thickness 1 — the classic 203px spine on 2045px."
+  );
+  if (!DRY_RUN) console.log(`\nDone: ${updated} row(s) written.`);
 }
 
 main().catch((err) => {
