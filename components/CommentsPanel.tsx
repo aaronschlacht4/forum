@@ -204,10 +204,22 @@ export default function CommentsPanel({
                   vip={Boolean((c.data as { vip?: boolean })?.vip)}
                 />
                 <span style={{ color: isVip(c) ? "#ffd98a" : "#ffe0b0" }}>{commenter(c)}</span>
-                {/* Honest labelling is the whole deal: these are generated in
-                    a historical figure's voice, and must never read as words
-                    the real person wrote. */}
-                {isVip(c) && <span style={vipBadge}>AI persona</span>}
+                {/* Honest labelling is the whole deal. A sourced comment is a
+                    verbatim excerpt from a real lecture and links to it at
+                    the timestamp — quoted from them, not posted by them. */}
+                {vipSource(c) ? (
+                  <a
+                    href={vipSource(c)!.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ ...vipBadge, textDecoration: "none", cursor: "pointer" }}
+                    title={`${vipSource(c)!.title ?? "Source"} — ${vipSource(c)!.channel ?? ""}`}
+                  >
+                    ▶ lecture
+                  </a>
+                ) : (
+                  isVip(c) && <span style={vipBadge}>AI persona</span>
+                )}
                 {c.visibility === "private" && <span style={badge}>only me</span>}
                 {c.userId && c.userId === currentUserId && (
                   <button onClick={() => onDeleteComment(c.id)} style={deleteButton} title="Delete">
@@ -294,9 +306,17 @@ function commenter(c: Annotation) {
   return c.displayName || c.username || "Someone";
 }
 
-/** Commentary generated in a historical figure's voice — see scripts/generate-vip-comments.mjs. */
+/** VIP commentary — see scripts/ingest-vip-lecture.mjs. */
 function isVip(c: Annotation) {
   return Boolean((c.data as { vip?: boolean })?.vip);
+}
+
+type VipSource = { url: string; title?: string; channel?: string };
+
+/** The lecture a sourced VIP comment quotes, if it carries one. */
+function vipSource(c: Annotation): VipSource | null {
+  const source = (c.data as { source?: VipSource })?.source;
+  return source?.url ? source : null;
 }
 
 /** A small initial, so a thread can be scanned by who said what. */
