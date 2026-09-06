@@ -201,8 +201,13 @@ export default function CommentsPanel({
                 <Avatar
                   name={commenter(c)}
                   anonymous={Boolean((c.data as { anonymous?: boolean })?.anonymous)}
+                  vip={Boolean((c.data as { vip?: boolean })?.vip)}
                 />
-                <span style={{ color: "#ffe0b0" }}>{commenter(c)}</span>
+                <span style={{ color: isVip(c) ? "#ffd98a" : "#ffe0b0" }}>{commenter(c)}</span>
+                {/* Honest labelling is the whole deal: these are generated in
+                    a historical figure's voice, and must never read as words
+                    the real person wrote. */}
+                {isVip(c) && <span style={vipBadge}>AI persona</span>}
                 {c.visibility === "private" && <span style={badge}>only me</span>}
                 {c.userId && c.userId === currentUserId && (
                   <button onClick={() => onDeleteComment(c.id)} style={deleteButton} title="Delete">
@@ -289,14 +294,24 @@ function commenter(c: Annotation) {
   return c.displayName || c.username || "Someone";
 }
 
+/** Commentary generated in a historical figure's voice — see scripts/generate-vip-comments.mjs. */
+function isVip(c: Annotation) {
+  return Boolean((c.data as { vip?: boolean })?.vip);
+}
+
 /** A small initial, so a thread can be scanned by who said what. */
-function Avatar({ name, anonymous }: { name: string; anonymous?: boolean }) {
+function Avatar({ name, anonymous, vip }: { name: string; anonymous?: boolean; vip?: boolean }) {
   return (
     <span
       aria-hidden
       style={{
         ...avatar,
-        background: anonymous ? "rgba(255,228,192,0.12)" : "rgba(255,200,120,0.22)",
+        background: anonymous
+          ? "rgba(255,228,192,0.12)"
+          : vip
+            ? "rgba(255,196,90,0.38)"
+            : "rgba(255,200,120,0.22)",
+        ...(vip ? { border: "1px solid rgba(255,214,130,0.55)" } : null),
       }}
     >
       {anonymous ? "?" : name.charAt(0).toUpperCase()}
@@ -527,6 +542,20 @@ const badge: React.CSSProperties = {
   fontSize: 10,
   padding: "1px 5px",
   color: "rgba(255,220,160,0.6)",
+};
+
+/* Gold-edged and unmissable: a VIP comment is written in a real person's
+   voice, and the label carrying "this is generated" must never be subtle. */
+const vipBadge: React.CSSProperties = {
+  border: "1px solid rgba(255,196,90,0.55)",
+  borderRadius: 4,
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+  padding: "1px 6px",
+  color: "#ffd98a",
+  background: "rgba(255,196,90,0.12)",
+  textTransform: "uppercase",
 };
 
 const deleteButton: React.CSSProperties = {
